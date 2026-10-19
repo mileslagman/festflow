@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FestFlow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <nav class="nav">
+      <a class="brand" href="#/"><span class="logo">◐</span><span>FestFlow</span></a>
+      <a href="#/" data-route="dashboard"><span class="ico">⌂</span><span>Dashboard</span></a>
+      <a href="#/festivals" data-route="festivals"><span class="ico">♫</span><span>Festivals</span></a>
+      <a href="#/flights" data-route="flights"><span class="ico">✈</span><span>Flights</span></a>
+      <a href="#/calendar" data-route="calendar"><span class="ico">▦</span><span>Calendar</span></a>
+      <a href="#/profile" data-route="profile"><span class="ico">☺</span><span>Profile</span></a>
+    </nav>
+    <main id="view" class="view"></main>
+  </div>
+  <div id="toast" class="toast"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/flights.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

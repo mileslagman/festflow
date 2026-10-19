@@ -112,20 +112,22 @@
   }
 
   const liveCache = {};
-  function live(from, to, depart, ret) {
-    const k = [from, to, depart, ret].join('|');
+  function getLive(endpoint, params) {
+    const k = endpoint + '?' + new URLSearchParams(params);
     if (!liveCache[k]) {
-      const q = new URLSearchParams({ from, to, depart, ret });
-      liveCache[k] = fetch(`api/fares?${q}`)
+      liveCache[k] = fetch(k)
         .then(async (r) => {
           const j = await r.json().catch(() => ({}));
-          if (!r.ok) throw new Error(j.error || 'Live fare lookup failed');
+          if (!r.ok) throw new Error(j.error || 'Live price lookup failed');
           return j;
         })
         .catch((e) => { delete liveCache[k]; throw e; });
     }
     return liveCache[k];
   }
+  const live = (from, to, depart, ret) => getLive('api/fares', { from, to, depart, ret });
+  const liveStays = (q, checkin, checkout, adults, rentals) =>
+    getLive('api/stays', { q, checkin, checkout, adults, rentals: rentals ? 1 : 0 });
 
-  F.flights = { airport, estimate, trend, links, sweetSpot, liveStatus, live };
+  F.flights = { airport, estimate, trend, links, sweetSpot, liveStatus, live, liveStays };
 })();

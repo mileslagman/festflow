@@ -54,9 +54,66 @@
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
 
   const home = () => (S.profile && S.profile.home) || 'ATL';
-  const defaultPlan = (f) => ({ weekend: 0, tier: 0, lodging: f.lodging.camp != null ? 'camp' : 'hotel', food: 60, from: home() });
+  const defaultGround = (f) => (f.ground.transit ? 'transit' : 'rental');
+  const defaultPlan = (f) => ({
+    weekend: 0, tier: 0, lodging: f.lodging.camp != null ? 'camp' : 'hotel', ground: defaultGround(f), group: 1, food: 60, from: home(),
+  });
+  const isEU = (f) => FL.airport(f.airport).region === 'EU';
+
+  // ---------- stay + ground transport models ----------
+  // Hotel rooms hold 2, Airbnb homes hold `sleeps`; costs are split across the group.
+  function stayCost(f, p, nights, depart, ret) {
+    const group = p.group || 1;
+    const L = f.lodging;
+    if (p.lodging === 'camp' && L.camp != null) {
+      return { kind: 'camp', label: 'Camping', units: group, unitLabel: 'campsite pass', rate: L.camp, total: L.camp * nights * group };
+    }
+    const kind = p.lodging === 'airbnb' ? 'airbnb' : 'hotel';
+    const ls = p.liveStay;
+    const live = ls && ls.kind === kind && ls.depart === depart && ls.ret === ret && ls.group === group && ls.nightly != null;
+    // A live Airbnb search is sized for the whole group, so it's one home.
+    const units = kind === 'hotel' ? Math.ceil(group / 2) : live ? 1 : Math.ceil(group / L.sleeps);
+    const rate = live ? ls.nightly : kind === 'hotel' ? L.hotel : L.airbnb;
+    return {
+      kind, live, rate, units, total: rate * nights * units,
+      label: kind === 'hotel' ? 'Hotel' : 'Airbnb / rental',
+      unitLabel: kind === 'hotel' ? 'room' : 'home',
+    };
+  }
+
+  const RIDE = { base: 5.5, perMi: 2.8, minFare: 12, surge: 2 };
+  const rideFare = (mi, surge, eu) => Math.max(RIDE.minFare, RIDE.base + RIDE.perMi * mi) * surge * (eu ? 0.8 : 1);
+
+  function groundCost(f, p, days, nights, camping) {
+    const g = f.ground, group = p.group || 1, eu = isEU(f);
+    let mode = p.ground || defaultGround(f);
+    if (mode === 'transit' && !g.transit) mode = 'rental';
+    if (mode === 'transit') {
+      return { mode, label: g.transit.label, total: g.transit.cost * group, lines: [[`${g.transit.label} × ${group}`, g.transit.cost * group]] };
+    }
+    if (mode === 'rideshare') {
+      const cars = Math.ceil(group / 4);
+      const airport = 2 * rideFare(g.airportMi, 1.2, eu) * cars;
+      // Getting there is normal pricing; leaving at close usually surges ~2×.
+      const daily = camping ? 0 : days * (rideFare(g.dailyMi, 1.2, eu) + rideFare(g.dailyMi, RIDE.surge, eu)) * cars;
+      const lines = [[`Airport rides ×2 (${g.airportMi} mi each)`, airport]];
+      if (daily) lines.push([`Venue rides ×${days * 2} (incl. ~2× post-show surge)`, daily]);
+      if (cars > 1) lines.push([`${cars} cars for ${group} people`, null]);
+      return { mode, label: 'Uber / Lyft', total: airport + daily, lines };
+    }
+    const cars = Math.ceil(group / 5);
+    const rent = g.rentalDaily * nights * 1.3 * cars; // ~30% taxes & airport fees
+    const miles = 2 * g.airportMi + (camping ? 0 : 2 * g.dailyMi * days);
+    const gas = (miles / 28) * (eu ? 7.5 : 3.7) * cars;
+    const parking = camping ? 0 : g.parking * days * cars;
+    const lines = [[`Rental ${plural(nights, 'day')} × ${money(g.rentalDaily)} + taxes & fees`, rent], [`Gas (~${Math.round(miles)} mi)`, gas]];
+    if (parking) lines.push([`Festival parking ×${days} days`, parking]);
+    if (cars > 1) lines.push([`${cars} cars for ${group} people`, null]);
+    return { mode: 'rental', label: 'Rental car', total: rent + gas + parking, lines };
+  }
 
   function trip(f, p = S.plans[f.id] || defaultPlan(f)) {
+    p = { ...defaultPlan(f), ...p };
     const [start, end] = f.weekends[p.weekend] || f.weekends[0];
     const depart = addDays(start, -1), ret = addDays(end, 1);
     const days = daysBetween(start, end) + 1;
@@ -68,12 +125,16 @@
     if (lf && lf.price != null && lf.from === from && lf.depart === depart && lf.ret === ret && !flight.local) {
       flight = { ...flight, price: lf.price, live: true, liveAt: lf.at };
     }
-    const camping = p.lodging === 'camp' && f.lodging.camp != null;
-    const lodgingRate = camping ? f.lodging.camp : f.lodging.hotel;
-    const lodging = lodgingRate * nights;
+    const group = p.group;
+    const stay = stayCost(f, p, nights, depart, ret);
+    const camping = stay.kind === 'camp';
+    const ground = groundCost(f, p, days, nights, camping);
+    // Everything below is per person, so it lines up with the personal budget.
+    const lodging = stay.total / group;
+    const transport = ground.total / group;
     const food = p.food * (days + 1);
-    const total = ticket + (flight ? flight.price : 0) + lodging + food;
-    return { start, end, depart, ret, days, nights, ticket, flight, from, camping, lodgingRate, lodging, food, total, plan: p };
+    const total = ticket + (flight ? flight.price : 0) + lodging + transport + food;
+    return { start, end, depart, ret, days, nights, ticket, flight, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
   }
 
   // Flight + booking-reminder events generated from a saved plan.
@@ -150,6 +211,7 @@
         <span>Ticket <b>${money(t.ticket)}</b></span>
         <span>Flight <b>${t.flight.local ? 'local' : money(t.flight.price)}</b></span>
         <span>Stay <b>${t.lodging ? money(t.lodging) : 'incl.'}</b></span>
+        <span>Getting around <b>${money(t.transport)}</b></span>
       </div>
       <div class="total"><span class="muted small">Est. trip from ${t.from}</span><span class="big">${money(t.total)}</span></div>
     </a>`;
@@ -228,6 +290,21 @@
         <div class="grow"><div class="title small">${esc(o.airlines || 'Multiple airlines')}</div>
           <div class="muted small">${o.stops ? plural(o.stops, 'stop') : 'Nonstop'}${o.duration ? ' · ' + fmtDur(o.duration) : ''}${o.departs ? ' · departs ' + esc(o.departs.slice(-5)) : ''}</div></div>
         <b>${money(o.price)}</b></div>`).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  function liveStayCard(r, rentals, nights) {
+    const what = rentals ? 'vacation rentals' : 'hotels';
+    if (r.typical == null) return `<div class="live-card"><span class="badge muted">● LIVE</span> <span class="muted small">Google has no ${what} with prices for these dates yet. Showing the festival-week estimate.</span></div>`;
+    return `<div class="live-card">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <span><span class="badge good">● LIVE</span> <span class="muted small">Google ${rentals ? 'vacation rentals' : 'Hotels'} · ${r.count} with prices · checked ${ago(r.fetchedAt)}</span></span></div>
+      <div class="big" style="font-size:30px;margin-top:6px">${money(r.typical)} <span class="muted small" style="font-family:Inter;font-weight:400">typical / night ${rentals ? `for ${plural(r.adults, 'guest')}` : 'per room'}</span></div>
+      <div class="muted small">Cheapest ${money(r.lowest)}/night. "Typical" is the middle of the 15 cheapest, used in your total.</div>
+      ${r.options.length ? `<div style="margin-top:8px">${r.options.map((o) => `<div class="item" style="padding:7px 0">
+        <div class="grow"><div class="title small">${o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.name)} ↗</a>` : esc(o.name)}</div>
+          <div class="muted small">${[o.type, o.rating ? `★ ${o.rating}${o.reviews ? ` (${o.reviews.toLocaleString()})` : ''}` : '', o.total ? `${money(o.total)} total for ${plural(nights, 'night')}` : ''].filter(Boolean).map(esc).join(' · ')}</div></div>
+        <b>${money(o.nightly)}</b></div>`).join('')}</div>` : ''}
     </div>`;
   }
 
@@ -337,7 +414,8 @@
       <div class="cost">
         <span>${esc(f.tickets[t.plan.tier].tier)} <b>${money(t.ticket)}</b></span>
         <span>Flight ${t.from}→${f.airport} <b>${fl.local ? '—' : money(fl.price)}</b>${fl.live ? ' <span class="badge good">live</span>' : ''}</span>
-        <span>${t.camping ? 'Camping' : 'Hotel'} ×${t.nights} <b>${t.lodging ? money(t.lodging) : 'incl.'}</b></span>
+        <span>${t.stay.label} ×${t.nights} <b>${t.lodging ? money(t.lodging) : 'incl.'}</b>${t.stay.live ? ' <span class="badge good">live</span>' : ''}</span>
+        <span>${esc(t.ground.label)} <b>${money(t.transport)}</b></span>
         <span>Food <b>${money(t.food)}</b></span>
       </div>
       <div class="total"><span class="muted small">Trip total</span><span class="big">${money(t.total)}</span></div>
@@ -381,7 +459,7 @@
   function viewFestival(id) {
     const f = fest(id);
     if (!f) { view.innerHTML = '<div class="empty">Festival not found. <a href="#/festivals">Back to festivals</a></div>'; return; }
-    let p = { ...(S.plans[id] || defaultPlan(f)) };
+    let p = { ...defaultPlan(f), ...(S.plans[id] || {}) };
     let day = null;
     const planned = () => !!S.plans[id];
     const g = (S.profile && S.profile.genres) || [];
@@ -404,15 +482,24 @@
           <div class="form-grid">
             ${f.weekends.length > 1 ? `<label class="field">Weekend<div class="seg" id="wk">${f.weekends.map((w, i) => `<button data-v="${i}">W${i + 1} · ${fmtRange(w[0], w[1], false)}</button>`).join('')}</div></label>` : ''}
             <label class="field">Ticket<select id="tier">${f.tickets.map((t, i) => `<option value="${i}">${esc(t.tier)} — ${money(t.price)}</option>`).join('')}</select></label>
+            <label class="field">Group size<input id="group" type="number" min="1" max="12" step="1" /></label>
             <label class="field">Stay<select id="lodging">
-              ${f.lodging.camp != null ? `<option value="camp">Camping — ${f.lodging.camp ? money(f.lodging.camp) + '/night' : 'included'}</option>` : ''}
-              <option value="hotel">Hotel / rental — ${money(f.lodging.hotel)}/night</option></select></label>
+              ${f.lodging.camp != null ? `<option value="camp">Camping</option>` : ''}
+              <option value="hotel">Hotel</option><option value="airbnb">Airbnb / vacation rental</option></select></label>
+            <label class="field">Getting around<select id="ground">
+              <option value="rideshare">Uber / Lyft</option><option value="rental">Rental car</option>
+              ${f.ground.transit ? `<option value="transit">${esc(f.ground.transit.label)}</option>` : ''}</select></label>
             <label class="field">Food & drink per day<input id="food" type="number" min="0" step="5" /></label>
             <label class="field">Flying from<select id="from">${airportOptions(p.from)}</select></label>
           </div>
           <div class="rows" id="breakdown" style="margin-top:18px"></div>
         </div>
         <div class="card pad-lg"><h2 style="margin-bottom:12px">Flights</h2><div id="flightBox"></div></div>
+      </div>
+
+      <div class="section split">
+        <div class="card pad-lg"><h2 style="margin-bottom:4px">Where to stay</h2><div id="stayBox"></div></div>
+        <div class="card pad-lg"><h2 style="margin-bottom:4px">Getting around</h2><div id="groundBox"></div></div>
       </div>
 
       <div class="section"><h2>Set-time planner</h2>
@@ -440,10 +527,102 @@
       $('#savePlan').textContent = planned() ? '✓ Saved to my plan — remove' : '★ Save to my plan';
       $('#savePlan').classList.toggle('primary', !planned());
       $$('#wk button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === p.weekend));
-      $('#tier').value = p.tier; $('#lodging').value = p.lodging; $('#food').value = p.food; $('#from').value = p.from;
+      $('#tier').value = p.tier; $('#lodging').value = t.stay.kind; $('#ground').value = t.ground.mode;
+      $('#group').value = p.group; $('#food').value = p.food; $('#from').value = p.from;
       drawBreakdown();
       drawFlights(t);
+      drawStay(t);
+      drawGround(t);
       drawSets(t);
+    }
+
+    // Clickable comparison tiles: per-person cost of each stay / transport option.
+    function optionTiles(field, opts) {
+      return `<div class="opts">${opts.map((o) => `<button class="opt ${o.on ? 'on' : ''}" data-field="${field}" data-v="${o.v}">
+        <span class="muted small">${o.label}</span><b>${money(o.cost)}</b><span class="muted small">${o.sub}</span></button>`).join('')}</div>`;
+    }
+    function bindTiles(root) {
+      $$('.opt', root).forEach((b) => b.addEventListener('click', () => { p[b.dataset.field] = b.dataset.v; commit(); }));
+    }
+
+    function drawStay(t) {
+      const L = f.lodging, group = p.group;
+      const kinds = [...(L.camp != null ? ['camp'] : []), 'hotel', 'airbnb'];
+      const opts = kinds.map((k) => {
+        const s = trip(f, { ...p, lodging: k });
+        const sub = k === 'camp' ? (L.camp ? `${money(L.camp)}/night` : 'included with ticket')
+          : `${money(s.stay.rate)}/night${s.stay.live ? ' · live' : ''} · ${plural(s.stay.units, s.stay.unitLabel)}`;
+        return { v: k, label: s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
+      });
+      const rooms = Math.ceil(group / 2);
+      const q = L.query, dates = `${fmtDate(t.depart)} to ${fmtDate(t.ret)}`;
+      $('#stayBox').innerHTML = `
+        <p class="muted small" style="margin:0 0 12px">Per person for ${plural(t.nights, 'night')}${group > 1 ? `, split ${group} ways` : ''}. Most people stay in <b style="color:var(--text)">${esc(L.area)}</b>. Rates are festival-week prices.</p>
+        ${optionTiles('lodging', opts)}
+        <div id="liveStay" style="margin-top:14px"></div>
+        <p class="muted small" style="margin:14px 0 8px">Search ${esc(q)} for ${dates}:</p>
+        <div class="btn-row">
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/travel/search?q=${encodeURIComponent(`hotels in ${q} ${dates}`)}">Google Hotels ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.booking.com/searchresults.html?${new URLSearchParams({ ss: q, checkin: t.depart, checkout: t.ret, group_adults: group, no_rooms: rooms })}">Booking.com ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.airbnb.com/s/${encodeURIComponent(q)}/homes?${new URLSearchParams({ checkin: t.depart, checkout: t.ret, adults: group })}">Airbnb ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.vrbo.com/search?${new URLSearchParams({ destination: q, startDate: t.depart, endDate: t.ret, adults: group })}">Vrbo ↗</a>
+        </div>`;
+      bindTiles($('#stayBox'));
+      loadLiveStay(t);
+    }
+
+    async function loadLiveStay(t) {
+      const box = $('#liveStay');
+      const kind = t.stay.kind;
+      if (kind === 'camp') { box.innerHTML = ''; return; }
+      const rentals = kind === 'airbnb';
+      const adults = rentals ? p.group : 2;
+      const key = [kind, t.depart, t.ret, p.group].join('|');
+      const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).depart, trip(f, p).ret, p.group].join('|') !== key;
+      if (!(await FL.liveStatus())) return;
+      box.innerHTML = `<div class="live-card"><span class="badge info">● LIVE</span> <span class="muted small">Checking Google ${rentals ? 'vacation rentals' : 'Hotels'}…</span></div>`;
+      try {
+        const r = await FL.liveStays(f.lodging.query, t.depart, t.ret, adults, rentals);
+        if (stale()) return;
+        box.innerHTML = liveStayCard(r, rentals, t.nights);
+        if (r.typical != null) {
+          p.liveStay = { kind, nightly: r.typical, depart: t.depart, ret: t.ret, group: p.group, at: r.fetchedAt };
+          if (planned()) { S.plans[id] = { ...p }; save(); }
+          drawBreakdown();
+          // Refresh the tiles so the selected option shows the live rate.
+          const opt = $(`#stayBox .opt[data-v="${kind}"]`);
+          const s = trip(f, p);
+          if (opt) opt.innerHTML = `<span class="muted small">${s.stay.label}</span><b>${money(s.lodging)}</b><span class="muted small">${money(s.stay.rate)}/night · live · ${plural(s.stay.units, s.stay.unitLabel)}</span>`;
+        }
+      } catch (err) {
+        if (!stale()) box.innerHTML = `<div class="notice"><b>Couldn't load live rates:</b> ${esc(err.message)}. Showing festival-week estimates instead.</div>`;
+      }
+    }
+
+    function drawGround(t) {
+      const g = f.ground;
+      const modes = ['rideshare', 'rental', ...(g.transit ? ['transit'] : [])];
+      const opts = modes.map((m) => {
+        const s = trip(f, { ...p, ground: m });
+        const sub = m === 'rideshare' ? (t.camping ? 'airport rides only' : `incl. ${t.days * 2} venue rides`)
+          : m === 'rental' ? `${money(g.rentalDaily)}/day + gas${g.parking && !t.camping ? ' & parking' : ''}` : 'per person';
+        return { v: m, label: s.ground.label, cost: s.transport, sub, on: m === t.ground.mode };
+      });
+      $('#groundBox').innerHTML = `
+        <p class="muted small" style="margin:0 0 12px">Per person, ${f.airport} → ${esc(f.lodging.area.split(/,| & /)[0])} → venue and back${p.group > 1 ? `, split ${p.group} ways` : ''}.</p>
+        ${optionTiles('ground', opts)}
+        <div class="rows" style="margin-top:14px">
+          ${t.ground.lines.map(([label, cost]) => `<div class="row small"><span class="muted">${esc(label)}</span><span>${cost == null ? '' : money(cost)}</span></div>`).join('')}
+          <div class="row"><b>${esc(t.ground.label)}${p.group > 1 ? ' · group total' : ''}</b><b>${money(t.ground.total)}</b></div>
+        </div>
+        ${t.ground.mode === 'rideshare' ? '<p class="muted small">Leaving right at close is when surge hits hardest. Walking 10–15 minutes away from the venue or waiting 30–45 minutes usually helps.</p>' : ''}
+        ${t.ground.mode === 'rental' && t.camping ? '<p class="muted small">Car camping: your car stays at the campsite, so no daily parking or driving.</p>' : ''}
+        <div class="btn-row" style="margin-top:10px">
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.uber.com/global/en/price-estimate/">Uber estimate ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.lyft.com/rider/fare-estimate">Lyft estimate ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.kayak.com/cars/${f.airport}/${t.depart}/${t.ret}">Rental cars on Kayak ↗</a>
+        </div>`;
+      bindTiles($('#groundBox'));
     }
 
     function drawBreakdown() {
@@ -451,9 +630,11 @@
       $('#breakdown').innerHTML = `
         <div class="row"><span>${esc(f.tickets[p.tier].tier)} ticket</span><span>${money(t.ticket)}</span></div>
         <div class="row"><span>Round-trip flight ${t.flight.local ? '' : `${t.from} ⇄ ${f.airport}`} ${t.flight.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.flight.local ? 'local' : money(t.flight.price)}</span></div>
-        <div class="row"><span>${t.camping ? 'Camping' : 'Hotel'} · ${plural(t.nights, 'night')}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
+        <div class="row"><span>${t.stay.label} · ${plural(t.nights, 'night')}${t.stay.kind !== 'camp' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
+        <div class="row"><span>${esc(t.ground.label)} <span class="muted small">(est.)</span></span><span>${money(t.transport)}</span></div>
         <div class="row"><span>Food & drink · ${t.days + 1} days</span><span>${money(t.food)}</span></div>
-        <div class="row total"><span>Estimated trip total</span><span class="grad-text">${money(t.total)}</span></div>
+        <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span class="grad-text">${money(t.total)}</span></div>
+        ${t.group > 1 ? `<div class="muted small">Whole group of ${t.group}: ${money(t.total * t.group)}. Stay and transport are split evenly.</div>` : ''}
         ${S.profile && S.profile.budget ? `<div class="muted small" style="margin-top:6px">That's ${Math.round(t.total / S.profile.budget * 100)}% of your ${money(S.profile.budget)} budget.</div>` : ''}`;
     }
 
@@ -516,6 +697,8 @@
     $$('#wk button').forEach((b) => b.addEventListener('click', () => { p.weekend = Number(b.dataset.v); commit(); }));
     $('#tier').addEventListener('change', (e) => { p.tier = Number(e.target.value); commit(); });
     $('#lodging').addEventListener('change', (e) => { p.lodging = e.target.value; commit(); });
+    $('#ground').addEventListener('change', (e) => { p.ground = e.target.value; commit(); });
+    $('#group').addEventListener('change', (e) => { p.group = Math.min(12, Math.max(1, Math.round(Number(e.target.value)) || 1)); commit(); });
     $('#food').addEventListener('change', (e) => { p.food = Math.max(0, Number(e.target.value) || 0); commit(); });
     $('#from').addEventListener('change', (e) => { p.from = e.target.value; commit(); });
 

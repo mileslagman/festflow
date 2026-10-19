@@ -36,16 +36,21 @@ function loadEnv() {
 
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
 
-async function fetchFares({ from, to, depart, ret }) {
+async function serp(params) {
   const url = new URL('https://serpapi.com/search.json');
-  url.search = new URLSearchParams({
-    engine: 'google_flights', type: '1', departure_id: from, arrival_id: to,
-    outbound_date: depart, return_date: ret, currency: 'USD', hl: 'en', gl: 'us', api_key: KEY,
-  });
+  url.search = new URLSearchParams({ ...params, currency: 'USD', hl: 'en', gl: 'us', api_key: KEY });
   const r = await fetch(url);
   const j = await r.json().catch(() => ({}));
+  // "Fully empty" results come back as an error string; treat them as no results.
+  if (j.error && /hasn't returned any results/i.test(j.error)) return {};
   if (!r.ok || j.error) throw httpError(502, j.error || `SerpApi returned ${r.status}`);
+  return j;
+}
 
+async function fetchFares({ from, to, depart, ret }) {
+  const j = await serp({
+    engine: 'google_flights', type: '1', departure_id: from, arrival_id: to, outbound_date: depart, return_date: ret,
+  });
   const itineraries = [...(j.best_flights || []), ...(j.other_flights || [])].filter((o) => typeof o.price === 'number');
   const options = itineraries.sort((a, b) => a.price - b.price).slice(0, 5).map((o) => {
     const segs = o.flights || [];
@@ -76,11 +81,48 @@ async function fares(q) {
   if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to) || !date.test(depart) || !date.test(ret)) {
     throw httpError(400, 'Expected from, to (airport codes), depart and ret (YYYY-MM-DD)');
   }
-  const k = [from, to, depart, ret].join('|');
+  return cached([from, to, depart, ret].join('|'), () => fetchFares({ from, to, depart, ret }));
+}
+
+// Hotels (rooms for 2) or vacation rentals (whole homes sized for the group) from Google Hotels.
+async function fetchStays({ q, checkin, checkout, adults, rentals }) {
+  const params = { engine: 'google_hotels', q, check_in_date: checkin, check_out_date: checkout, adults: String(adults), sort_by: '3' };
+  if (rentals) params.vacation_rentals = 'true';
+  const j = await serp(params);
+  const props = (j.properties || []).filter((x) => x.rate_per_night && typeof x.rate_per_night.extracted_lowest === 'number');
+  const nightly = props.map((x) => x.rate_per_night.extracted_lowest).sort((a, b) => a - b);
+  // Cheapest listings are often hostels or far-out places, so "typical" is the median of the 15 cheapest.
+  const sample = nightly.slice(0, 15);
+  const typical = sample.length ? sample[Math.floor(sample.length / 2)] : null;
+  const options = props.sort((a, b) => a.rate_per_night.extracted_lowest - b.rate_per_night.extracted_lowest).slice(0, 5).map((x) => ({
+    name: x.name,
+    type: x.type || null,
+    nightly: x.rate_per_night.extracted_lowest,
+    total: x.total_rate && typeof x.total_rate.extracted_lowest === 'number' ? x.total_rate.extracted_lowest : null,
+    rating: x.overall_rating || null,
+    reviews: x.reviews || null,
+    link: typeof x.link === 'string' && x.link.startsWith('http') ? x.link : null,
+  }));
+  return { live: true, q, checkin, checkout, adults, rentals: !!rentals, lowest: nightly[0] ?? null, typical, count: props.length, options, fetchedAt: Date.now() };
+}
+
+async function stays(q) {
+  const date = /^\d{4}-\d{2}-\d{2}$/;
+  const query = String(q.q || '').trim();
+  const adults = Math.min(Math.max(parseInt(q.adults, 10) || 2, 1), 12);
+  const rentals = q.rentals === '1';
+  if (!query || query.length > 80 || /[<>{}]/.test(query) || !date.test(q.checkin) || !date.test(q.checkout)) {
+    throw httpError(400, 'Expected q (place), checkin and checkout (YYYY-MM-DD)');
+  }
+  const args = { q: query, checkin: q.checkin, checkout: q.checkout, adults, rentals };
+  return cached(['stays', query, q.checkin, q.checkout, adults, rentals].join('|'), () => fetchStays(args));
+}
+
+function cached(k, load) {
   const hit = cache[k];
-  if (hit && Date.now() - hit.fetchedAt < TTL) return { ...hit, cached: true };
+  if (hit && Date.now() - hit.fetchedAt < TTL) return Promise.resolve({ ...hit, cached: true });
   if (!pending.has(k)) {
-    pending.set(k, fetchFares({ from, to, depart, ret })
+    pending.set(k, load()
       .then((out) => { cache[k] = out; fs.writeFile(CACHE_FILE, JSON.stringify(cache), () => {}); return out; })
       .finally(() => pending.delete(k)));
   }
@@ -94,11 +136,12 @@ function json(res, status, body) {
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
-  if (u.pathname === '/api/status') return json(res, 200, { live: !!KEY, provider: KEY ? 'Google Flights via SerpApi' : null });
-  if (u.pathname === '/api/fares') {
-    if (!KEY) return json(res, 503, { error: 'Live fares are off: no SERPAPI_KEY set.' });
-    try { return json(res, 200, await fares(Object.fromEntries(u.searchParams))); }
-    catch (e) { console.error('[fares]', e.message); return json(res, e.status || 500, { error: e.message }); }
+  if (u.pathname === '/api/status') return json(res, 200, { live: !!KEY, provider: KEY ? 'Google Flights & Hotels via SerpApi' : null });
+  const handler = { '/api/fares': fares, '/api/stays': stays }[u.pathname];
+  if (handler) {
+    if (!KEY) return json(res, 503, { error: 'Live prices are off: no SERPAPI_KEY set.' });
+    try { return json(res, 200, await handler(Object.fromEntries(u.searchParams))); }
+    catch (e) { console.error(`[${u.pathname}]`, e.message); return json(res, e.status || 500, { error: e.message }); }
   }
 
   let p = decodeURIComponent(u.pathname);

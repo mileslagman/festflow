@@ -130,6 +130,7 @@
     getLive('api/stays', { q, checkin, checkout, adults, rentals: rentals ? 1 : 0 });
   const lookup = (q) => getLive('api/lookup', { q });
   const geocode = (q) => getLive('api/geocode', { q }); // free, works without a SerpApi key
+  const route = (a, b) => getLive('api/route', { from: `${a.lat.toFixed(4)},${a.lon.toFixed(4)}`, to: `${b.lat.toFixed(4)},${b.lon.toFixed(4)}` });
 
   function nearestAirport(lat, lon) {
     const here = { lat, lon };
@@ -141,5 +142,5 @@
     return best;
   }
 
-  F.flights = { airport, miles, estimate, trend, links, sweetSpot, liveStatus, live, liveStays, lookup, geocode, nearestAirport };
+  F.flights = { airport, miles, estimate, trend, links, sweetSpot, liveStatus, live, liveStays, lookup, geocode, route, nearestAirport };
 })();

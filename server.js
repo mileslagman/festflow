@@ -203,6 +203,28 @@ async function geocode(q) {
   });
 }
 
+// ---------- driving routes (OpenStreetMap OSRM, no key) ----------
+function parseLatLon(s) {
+  const m = String(s || '').match(/^(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = Number(m[1]), lon = Number(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? [lat, lon] : null;
+}
+
+async function route(q) {
+  const a = parseLatLon(q.from), b = parseLatLon(q.to);
+  if (!a || !b) throw httpError(400, 'Expected from and to as lat,lon');
+  const key = ['route', ...a, ...b].map((x) => (typeof x === 'number' ? x.toFixed(3) : x)).join('|');
+  return cached(key, async () => {
+    const url = `https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=false`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'FestFlow/1.0 (personal festival planner)' } });
+    if (!r.ok) throw httpError(502, `Router returned ${r.status}`);
+    const j = await r.json();
+    if (j.code !== 'Ok' || !j.routes || !j.routes.length) return { found: false, fetchedAt: Date.now() };
+    return { found: true, miles: j.routes[0].distance / 1609.34, hours: j.routes[0].duration / 3600, fetchedAt: Date.now() };
+  });
+}
+
 function cached(k, load) {
   const hit = cache[k];
   if (hit && Date.now() - hit.fetchedAt < TTL) return Promise.resolve({ ...hit, cached: true });
@@ -222,9 +244,11 @@ function json(res, status, body) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (u.pathname === '/api/status') return json(res, 200, { live: !!KEY, provider: KEY ? 'Google Flights & Hotels via SerpApi' : null });
-  if (u.pathname === '/api/geocode') {
-    try { return json(res, 200, await geocode(Object.fromEntries(u.searchParams))); }
-    catch (e) { console.error('[/api/geocode]', e.message); return json(res, e.status || 500, { error: e.message }); }
+  // Map lookups and driving routes are free and don't need the SerpApi key.
+  const free = { '/api/geocode': geocode, '/api/route': route }[u.pathname];
+  if (free) {
+    try { return json(res, 200, await free(Object.fromEntries(u.searchParams))); }
+    catch (e) { console.error(`[${u.pathname}]`, e.message); return json(res, e.status || 500, { error: e.message }); }
   }
   const handler = { '/api/fares': fares, '/api/stays': stays, '/api/lookup': lookup }[u.pathname];
   if (handler) {

@@ -331,3 +331,16 @@ FEST.festivals.forEach((f) => {
   Object.assign(f.lodging, STAYS[f.id]);
   f.ground = GROUND[f.id];
 });
+
+// Venue coordinates, used for driving distances.
+const VENUES = {
+  ultra: [25.775, -80.186], coachella: [33.679, -116.237], edc: [36.272, -115.010], primavera: [41.410, 2.227],
+  govball: [40.740, -73.840], bonnaroo: [35.477, -86.055], glastonbury: [51.156, -2.585], forest: [43.510, -86.350],
+  tomorrowland: [51.091, 4.385], lolla: [41.876, -87.619], osheaga: [45.508, -73.533], outsidelands: [37.769, -122.486],
+  acl: [30.267, -97.773], edcorlando: [28.539, -81.403], movement: [42.328, -83.044], northcoast: [41.765, -87.806],
+  shakyknees: [33.786, -84.374], lostlands: [39.970, -82.360],
+};
+FEST.festivals.forEach((f) => {
+  const v = VENUES[f.id];
+  if (v) f.venue = { lat: v[0], lon: v[1] };
+});

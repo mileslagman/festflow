@@ -58,10 +58,38 @@
 
   const home = () => (S.profile && S.profile.home) || 'ATL';
   const defaultGround = (f) => (f.ground.transit ? 'transit' : 'rental');
+  const isEU = (f) => FL.airport(f.airport).region === 'EU';
   const defaultPlan = (f) => ({
     weekend: 0, tier: 0, lodging: f.lodging.camp != null ? 'camp' : 'hotel', ground: defaultGround(f), group: 1, food: 60, from: home(),
+    travel: 'fly', mpg: 28, gasPrice: isEU(f) ? 7.5 : 3.4,
   });
-  const isEU = (f) => FL.airport(f.airport).region === 'EU';
+
+  // ---------- driving ----------
+  // Driving is offered when the venue is within ~900 miles in a straight line (about 1,100 road miles).
+  const DRIVE = { maxMi: 900, roadFactor: 1.22, mph: 58 };
+  const fmtHours = (h) => {
+    const m = Math.max(1, Math.round(h * 60));
+    return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}`;
+  };
+  const routeKey = (o, v) => `${o.lat.toFixed(3)},${o.lon.toFixed(3)}>${v.lat.toFixed(3)},${v.lon.toFixed(3)}`;
+  function driveOrigin(from) {
+    const pc = S.profile && S.profile.homeCoords;
+    if (pc && from === home()) return pc;
+    const a = FL.airport(from);
+    return { lat: a.lat, lon: a.lon, label: `${a.city} area` };
+  }
+  function driveInfo(f, from) {
+    const a = FL.airport(from), b = FL.airport(f.airport);
+    if (!a || !b || a.region !== b.region) return null;
+    const o = driveOrigin(from);
+    const v = f.venue || b;
+    const straight = FL.miles(o, v);
+    if (straight > DRIVE.maxMi) return null;
+    const key = routeKey(o, v);
+    const r = (S.routes || {})[key];
+    const miles = r ? r.miles : Math.max(straight * DRIVE.roadFactor, 1);
+    return { o, v, key, real: !!r, miles, hours: r ? r.hours : miles / DRIVE.mph };
+  }
 
   // ---------- stay + ground transport models ----------
   // Hotel rooms hold 2, Airbnb homes hold `sleeps`; costs are split across the group.
@@ -87,8 +115,19 @@
   const RIDE = { base: 5.5, perMi: 2.8, minFare: 12, surge: 2 };
   const rideFare = (mi, surge, eu) => Math.max(RIDE.minFare, RIDE.base + RIDE.perMi * mi) * surge * (eu ? 0.8 : 1);
 
-  function groundCost(f, p, days, nights, camping) {
+  function groundCost(f, p, days, nights, camping, driving) {
     const g = f.ground, group = p.group || 1, eu = isEU(f);
+    const mpg = p.mpg || 28, gasPrice = p.gasPrice || (eu ? 7.5 : 3.4);
+    if (driving) {
+      const cars = Math.ceil(group / 5);
+      const miles = camping ? 0 : 2 * g.dailyMi * days;
+      const gas = (miles / mpg) * gasPrice * cars;
+      const parking = camping ? 0 : g.parking * days * cars;
+      const lines = camping ? [['Car stays at the campsite all weekend', 0]] : [[`Gas around town (~${Math.round(miles)} mi)`, gas]];
+      if (parking) lines.push([`Festival parking ×${days} days`, parking]);
+      if (cars > 1) lines.push([`${cars} cars for ${group} people`, null]);
+      return { mode: 'car', label: 'Your car', total: gas + parking, lines };
+    }
     let mode = p.ground || defaultGround(f);
     if (mode === 'transit' && !g.transit) mode = 'rental';
     if (mode === 'transit') {
@@ -107,7 +146,7 @@
     const cars = Math.ceil(group / 5);
     const rent = g.rentalDaily * nights * 1.3 * cars; // ~30% taxes & airport fees
     const miles = 2 * g.airportMi + (camping ? 0 : 2 * g.dailyMi * days);
-    const gas = (miles / 28) * (eu ? 7.5 : 3.7) * cars;
+    const gas = (miles / mpg) * gasPrice * cars;
     const parking = camping ? 0 : g.parking * days * cars;
     const lines = [[`Rental ${plural(nights, 'day')} × ${money(g.rentalDaily)} + taxes & fees`, rent], [`Gas (~${Math.round(miles)} mi)`, gas]];
     if (parking) lines.push([`Festival parking ×${days} days`, parking]);
@@ -129,15 +168,24 @@
       flight = { ...flight, price: lf.price, live: true, liveAt: lf.at };
     }
     const group = p.group;
+    const drive = driveInfo(f, from);
+    let travel;
+    if ((p.travel === 'drive' || flight.local) && drive) {
+      const cars = Math.ceil(group / 5);
+      const gas = ((drive.miles * 2) / p.mpg) * p.gasPrice * cars;
+      travel = { mode: 'drive', price: gas / group, total: gas, cars, ...drive };
+    } else {
+      travel = { mode: 'fly', price: flight.local ? 0 : flight.price };
+    }
     const stay = stayCost(f, p, nights, depart, ret);
     const camping = stay.kind === 'camp';
-    const ground = groundCost(f, p, days, nights, camping);
+    const ground = groundCost(f, p, days, nights, camping, travel.mode === 'drive');
     // Everything below is per person, so it lines up with the personal budget.
     const lodging = stay.total / group;
     const transport = ground.total / group;
     const food = p.food * (days + 1);
-    const total = ticket + (flight ? flight.price : 0) + lodging + transport + food;
-    return { start, end, depart, ret, days, nights, ticket, flight, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
+    const total = ticket + travel.price + lodging + transport + food;
+    return { start, end, depart, ret, days, nights, ticket, flight, travel, drive, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
   }
 
   // Flight + booking-reminder events generated from a saved plan.
@@ -145,7 +193,13 @@
     S.events = S.events.filter((e) => !(e.festId === f.id && e.auto));
     if (S.plans[f.id]) {
       const t = trip(f);
-      if (!t.flight.local) {
+      if (t.travel.mode === 'drive') {
+        const info = `${Math.round(t.travel.miles)} mi · ~${fmtHours(t.travel.hours)} without stops`;
+        S.events.push(
+          { id: uid(), auto: true, festId: f.id, type: 'drive', date: t.depart, start: '09:00', end: '', title: `Drive to ${f.name}`, location: info },
+          { id: uid(), auto: true, festId: f.id, type: 'drive', date: t.ret, start: '11:00', end: '', title: 'Drive home', location: info },
+        );
+      } else if (!t.flight.local) {
         S.events.push(
           { id: uid(), auto: true, festId: f.id, type: 'flight', date: t.depart, start: '09:00', end: '', title: `Fly ${t.from} → ${f.airport}`, location: `${f.name} trip` },
           { id: uid(), auto: true, festId: f.id, type: 'flight', date: t.ret, start: '11:00', end: '', title: `Fly ${f.airport} → ${t.from}`, location: `${f.name} trip` },
@@ -160,7 +214,7 @@
   }
 
   // ---------- event + clash helpers ----------
-  const TYPE_COLORS = { set: '#ff5fa2', flight: '#5cb8ff', reminder: '#ffb547', custom: '#7c5cff' };
+  const TYPE_COLORS = { set: '#ff5fa2', flight: '#5cb8ff', drive: '#b8ff5c', reminder: '#ffb547', custom: '#7c5cff' };
   const evColor = (e) => (e.type === 'set' && fest(e.festId) ? fest(e.festId).color : TYPE_COLORS[e.type] || TYPE_COLORS.custom);
   const byTime = (a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || ''));
   // Festival-day minutes: anything before 8am belongs to the previous night.
@@ -212,7 +266,7 @@
       <div class="tags">${f.genres.map((x) => `<span class="tag ${g.includes(x) ? 'match' : ''}">${x}</span>`).join('')}</div>
       <div class="cost">
         <span>Ticket <b>${money(t.ticket)}</b></span>
-        <span>Flight <b>${t.flight.local ? 'local' : money(t.flight.price)}</b></span>
+        <span>${t.travel.mode === 'drive' ? `Drive <b>${money(t.travel.price)}</b>` : `Flight <b>${t.flight.local ? 'local' : money(t.flight.price)}</b>`}</span>
         <span>Stay <b>${t.lodging ? money(t.lodging) : 'incl.'}</b></span>
         <span>Getting around <b>${money(t.transport)}</b></span>
       </div>
@@ -327,6 +381,7 @@
         <label class="field">Your name<input name="name" required value="${esc(p.name || '')}" placeholder="Alex" /></label>
         <label class="field">Home airport<select name="home">${airportOptions(p.home || 'ATL')}</select></label>
         <label class="field">Festival budget (USD)<input name="budget" type="number" min="0" step="50" value="${p.budget || 2500}" /></label>
+        <label class="field">Home city (for driving)<input name="homeCity" value="${esc(p.homeCity || '')}" placeholder="e.g. Decatur, GA" /></label>
       </div>
       <div style="margin-top:16px"><div class="muted small" style="margin-bottom:8px">What do you like to hear?</div>
         <div class="chips">${F.genres.map((x) => `<span class="chip ${g.includes(x) ? 'on' : ''}" data-genre="${x}">${x}</span>`).join('')}</div></div>`;
@@ -336,13 +391,26 @@
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
       const fd = new FormData(form);
-      const prevHome = S.profile && S.profile.home;
+      const prev = S.profile || {};
+      const prevHome = prev.home;
+      const homeCity = (fd.get('homeCity') || '').trim();
       S.profile = {
         name: fd.get('name').trim() || 'Friend',
         home: fd.get('home'),
         budget: Number(fd.get('budget')) || 0,
         genres: $$('.chip.on', form).map((c) => c.dataset.genre),
+        homeCity,
+        homeCoords: homeCity && homeCity === prev.homeCity ? prev.homeCoords : undefined,
       };
+      // Driving distances start from the home city when we can place it on the map.
+      if (homeCity && !S.profile.homeCoords) {
+        FL.geocode(homeCity).then((r) => {
+          if (!r.found || !S.profile || S.profile.homeCity !== homeCity) return;
+          S.profile.homeCoords = { lat: r.lat, lon: r.lon, label: r.city || homeCity };
+          save();
+          toast(`Driving distances now start from ${r.city || homeCity}`);
+        }).catch(() => toast('Map lookup needs node server.js; driving starts from your home airport for now'));
+      }
       // Plans that were following the old home airport follow the new one.
       for (const [id, p] of Object.entries(S.plans)) {
         if (!p.from || p.from === prevHome) { p.from = S.profile.home; syncAutoEvents(fest(id)); }
@@ -414,10 +482,12 @@
     const fl = t.flight;
     return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}"><span class="bar"></span>
       <div class="top"><div><h3>${esc(f.name)}</h3><div class="muted small">${fmtRange(t.start, t.end)} · ${esc(f.city)}</div></div>
-        ${fl.local ? '<span class="badge muted">local</span>' : `<span class="badge ${fl.tone}">${fl.status.split(' — ')[0]}</span>`}</div>
+        ${t.travel.mode === 'drive' ? `<span class="badge good">Road trip · ~${fmtHours(t.travel.hours)}</span>` : fl.local ? '<span class="badge muted">local</span>' : `<span class="badge ${fl.tone}">${fl.status.split(' — ')[0]}</span>`}</div>
       <div class="cost">
         <span>${esc(f.tickets[t.plan.tier].tier)} <b>${money(t.ticket)}</b></span>
-        <span>Flight ${t.from}→${f.airport} <b>${fl.local ? '—' : money(fl.price)}</b>${fl.live ? ' <span class="badge good">live</span>' : ''}</span>
+        ${t.travel.mode === 'drive'
+          ? `<span>Drive ${Math.round(t.travel.miles)} mi each way <b>${money(t.travel.price)}</b> gas</span>`
+          : `<span>Flight ${t.from}→${f.airport} <b>${fl.local ? '—' : money(fl.price)}</b>${fl.live ? ' <span class="badge good">live</span>' : ''}</span>`}
         <span>${t.stay.label} ×${t.nights} <b>${t.lodging ? money(t.lodging) : 'incl.'}</b>${t.stay.live ? ' <span class="badge good">live</span>' : ''}</span>
         <span>${esc(t.ground.label)} <b>${money(t.transport)}</b></span>
         <span>Food <b>${money(t.food)}</b></span>
@@ -452,7 +522,7 @@
         (!m || f.weekends.some((w) => w[0].startsWith(m) || w[1].startsWith(m))));
       const key = {
         date: (f) => f.weekends[0][0], total: (f) => trip(f).total, ticket: (f) => f.tickets[0].price,
-        flight: (f) => trip(f).flight.price, match: (f) => -f.genres.filter((x) => genres.includes(x)).length,
+        flight: (f) => trip(f).travel.price, match: (f) => -f.genres.filter((x) => genres.includes(x)).length,
       }[sort];
       list = list.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
       const raw = $('#q').value.trim();
@@ -502,7 +572,8 @@
             <label class="field">Stay<select id="lodging">
               ${f.lodging.camp != null ? `<option value="camp">Camping</option>` : ''}
               <option value="hotel">Hotel</option><option value="airbnb">Airbnb / vacation rental</option></select></label>
-            <label class="field">Getting around<select id="ground">
+            <label class="field">Getting there<select id="travel"><option value="fly">Fly</option><option value="drive">Drive</option></select></label>
+            <label class="field">Getting around<select id="ground"><option value="car" hidden>Your car</option>
               <option value="rideshare">Uber / Lyft</option><option value="rental">Rental car</option>
               ${f.ground.transit ? `<option value="transit">${esc(f.ground.transit.label)}</option>` : ''}</select></label>
             <label class="field">Food & drink per day<input id="food" type="number" min="0" step="5" /></label>
@@ -510,7 +581,7 @@
           </div>
           <div class="rows" id="breakdown" style="margin-top:18px"></div>
         </div>
-        <div class="card pad-lg"><h2 style="margin-bottom:12px">Flights</h2><div id="flightBox"></div></div>
+        <div class="card pad-lg"><h2 style="margin-bottom:12px">Getting there</h2><div id="travelTiles"></div><div id="flightBox"></div></div>
       </div>
 
       <div class="section split">
@@ -544,9 +615,14 @@
       $('#savePlan').classList.toggle('primary', !planned());
       $$('#wk button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === p.weekend));
       $('#tier').value = p.tier; $('#lodging').value = t.stay.kind; $('#ground').value = t.ground.mode;
+      $('#ground').disabled = t.travel.mode === 'drive';
+      $('#travel').value = t.travel.mode;
+      $('#travel option[value="drive"]').disabled = !t.drive;
+      $('#travel option[value="fly"]').disabled = t.flight.local && !!t.drive;
+      $('#travel option[value="drive"]').textContent = t.drive ? `Drive (${Math.round(t.drive.miles)} mi)` : 'Drive (too far)';
       $('#group').value = p.group; $('#food').value = p.food; $('#from').value = p.from;
       drawBreakdown();
-      drawFlights(t);
+      drawTravel(t);
       drawStay(t);
       drawGround(t);
       drawSets(t);
@@ -617,6 +693,17 @@
 
     function drawGround(t) {
       const g = f.ground;
+      if (t.ground.mode === 'car') {
+        $('#groundBox').innerHTML = `
+          <p class="muted small" style="margin:0 0 12px">You're driving, so you'll use your own car around ${esc(f.lodging.area.split(/,| & /)[0])}${p.group > 1 ? `, split ${p.group} ways` : ''}.</p>
+          <div class="opts"><div class="opt on" style="cursor:default"><span class="muted small">Your car</span><b>${money(t.transport)}</b><span class="muted small">per person · gas${g.parking && !t.camping ? ' & parking' : ''}</span></div></div>
+          <div class="rows" style="margin-top:14px">
+            ${t.ground.lines.map(([label, cost]) => `<div class="row small"><span class="muted">${esc(label)}</span><span>${cost == null ? '' : money(cost)}</span></div>`).join('')}
+            <div class="row"><b>Your car${p.group > 1 ? ' · group total' : ''}</b><b>${money(t.ground.total)}</b></div>
+          </div>
+          <p class="muted small">Switch "Getting there" to Fly to compare Uber/Lyft, rental cars and transit.</p>`;
+        return;
+      }
       const modes = ['rideshare', 'rental', ...(g.transit ? ['transit'] : [])];
       const opts = modes.map((m) => {
         const s = trip(f, { ...p, ground: m });
@@ -645,13 +732,86 @@
       const t = trip(f, p);
       $('#breakdown').innerHTML = `
         <div class="row"><span>${esc(f.tickets[p.tier].tier)} ticket</span><span>${money(t.ticket)}</span></div>
-        <div class="row"><span>Round-trip flight ${t.flight.local ? '' : `${t.from} ⇄ ${f.airport}`} ${t.flight.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.flight.local ? 'local' : money(t.flight.price)}</span></div>
+        ${t.travel.mode === 'drive'
+          ? `<div class="row"><span>Gas to drive there & back · ${Math.round(t.travel.miles * 2).toLocaleString()} mi${t.travel.cars > 1 ? ` · ${t.travel.cars} cars` : ''} <span class="muted small">(est.)</span></span><span>${money(t.travel.price)}</span></div>`
+          : `<div class="row"><span>Round-trip flight ${t.flight.local ? '' : `${t.from} ⇄ ${f.airport}`} ${t.flight.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.flight.local ? 'local' : money(t.flight.price)}</span></div>`}
         <div class="row"><span>${t.stay.label} · ${plural(t.nights, 'night')}${t.stay.kind !== 'camp' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
         <div class="row"><span>${esc(t.ground.label)} <span class="muted small">(est.)</span></span><span>${money(t.transport)}</span></div>
         <div class="row"><span>Food & drink · ${t.days + 1} days</span><span>${money(t.food)}</span></div>
         <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span class="grad-text">${money(t.total)}</span></div>
         ${t.group > 1 ? `<div class="muted small">Whole group of ${t.group}: ${money(t.total * t.group)}. Stay and transport are split evenly.</div>` : ''}
         ${S.profile && S.profile.budget ? `<div class="muted small" style="margin-top:6px">That's ${Math.round(t.total / S.profile.budget * 100)}% of your ${money(S.profile.budget)} budget.</div>` : ''}`;
+    }
+
+    function drawTravel(t) {
+      const tiles = $('#travelTiles');
+      if (!t.drive) {
+        tiles.innerHTML = '';
+        if (p.travel === 'drive') p.travel = 'fly';
+        drawFlights(t);
+        return;
+      }
+      const fly = trip(f, { ...p, travel: 'fly' }), drv = trip(f, { ...p, travel: 'drive' });
+      if (fly.flight.local) {
+        tiles.innerHTML = '';
+        drawDrive(t, fly);
+        loadRoute(t.drive);
+        return;
+      }
+      const cheaper = drv.travel.price < fly.travel.price ? 'drive' : 'fly';
+      tiles.innerHTML = optionTiles('travel', [
+        { v: 'fly', label: `Fly ${t.from} ⇄ ${f.airport}${cheaper === 'fly' ? ' · cheaper' : ''}`, cost: fly.travel.price, sub: fly.flight.local ? 'local airport' : `round trip${fly.flight.live ? ' · live' : ' · est.'}`, on: t.travel.mode === 'fly' },
+        { v: 'drive', label: `Drive${cheaper === 'drive' ? ' · cheaper' : ''}`, cost: drv.travel.price, sub: `gas · ${Math.round(t.drive.miles)} mi · ~${fmtHours(t.drive.hours)} each way`, on: t.travel.mode === 'drive' },
+      ]) + '<div style="height:16px"></div>';
+      bindTiles(tiles);
+      if (t.travel.mode === 'drive') drawDrive(t, fly); else drawFlights(t);
+      loadRoute(t.drive);
+    }
+
+    const routePending = new Set();
+    async function loadRoute(d) {
+      if (d.real || routePending.has(d.key)) return;
+      routePending.add(d.key);
+      try {
+        const r = await FL.route(d.o, d.v);
+        if (r.found) {
+          S.routes = { ...(S.routes || {}), [d.key]: { miles: r.miles, hours: r.hours } };
+          save();
+          if ($('#travelTiles') && $('#travelTiles').isConnected) { if (planned()) syncAutoEvents(f); draw(); }
+        }
+      } catch (e) { /* no server: keep the straight-line estimate */ }
+    }
+
+    function drawDrive(t, fly) {
+      const d = t.travel;
+      const oneWay = (d.miles / p.mpg) * p.gasPrice * d.cars;
+      const maps = `https://www.google.com/maps/dir/?${new URLSearchParams({ api: 1, origin: `${d.o.lat},${d.o.lon}`, destination: `${d.v.lat},${d.v.lon}`, travelmode: 'driving' })}`;
+      $('#flightBox').innerHTML = `
+        <div class="muted small" style="margin-bottom:10px">${esc(d.o.label || 'Home')} → ${esc(f.name)} · ${fmtDay(t.depart)} – ${fmtDay(t.ret)}</div>
+        <div class="live-card" style="border-color:rgba(184,255,92,.4);background:linear-gradient(135deg,rgba(184,255,92,.08),rgba(39,230,255,.05))">
+          <div class="big" style="font-size:32px">${money(d.total)} <span class="muted small" style="font-family:Inter;font-weight:400">gas, round trip${d.cars > 1 ? ` · ${d.cars} cars` : ''}</span></div>
+          <div class="muted small">${money(d.price)} per person${p.group > 1 ? ` (split ${p.group} ways)` : ''} · ${Math.round(d.miles * 2).toLocaleString()} mi round trip · ~${fmtHours(d.hours)} each way without stops</div>
+        </div>
+        <div class="form-grid" style="margin-top:14px">
+          <label class="field">Your car's MPG<input id="mpg" type="number" min="5" max="150" step="1" value="${p.mpg}" /></label>
+          <label class="field">Gas price ($/${isEU(f) ? 'gal equiv.' : 'gal'})<input id="gasPrice" type="number" min="0.5" max="15" step="0.05" value="${p.gasPrice}" /></label>
+        </div>
+        <div class="rows" style="margin-top:12px">
+          <div class="row small"><span class="muted">Drive there (${Math.round(d.miles)} mi ÷ ${p.mpg} mpg × $${p.gasPrice.toFixed(2)}${d.cars > 1 ? ` × ${d.cars} cars` : ''})</span><span>${money(oneWay)}</span></div>
+          <div class="row small"><span class="muted">Drive home</span><span>${money(oneWay)}</span></div>
+          <div class="row"><b>Gas, round trip</b><b>${money(d.total)}</b></div>
+        </div>
+        <p class="muted small">${d.real ? 'Road distance and time from OpenStreetMap routing.' : 'Distance estimated from a straight line. The real road route loads when node server.js is running.'}
+          ${fly.flight.local ? '' : ` Flying would be about <b style="color:var(--text)">${money(fly.travel.price)}</b> per person.`}
+          ${d.hours > 9 ? ' That’s a long haul: consider splitting it with an overnight stop, which adds a hotel night each way.' : ''}</p>
+        <div class="btn-row"><a class="btn sm" target="_blank" rel="noopener" href="${maps}">Directions in Google Maps ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.gasbuddy.com/gaspricemap">Gas prices on GasBuddy ↗</a></div>`;
+      const num = (el, key, lo, hi) => el.addEventListener('change', () => {
+        const v = Number(el.value);
+        if (v >= lo && v <= hi) { p[key] = v; commit(); } else el.value = p[key];
+      });
+      num($('#mpg'), 'mpg', 5, 150);
+      num($('#gasPrice'), 'gasPrice', 0.5, 15);
     }
 
     function drawFlights(t) {
@@ -714,6 +874,7 @@
     $('#tier').addEventListener('change', (e) => { p.tier = Number(e.target.value); commit(); });
     $('#lodging').addEventListener('change', (e) => { p.lodging = e.target.value; commit(); });
     $('#ground').addEventListener('change', (e) => { p.ground = e.target.value; commit(); });
+    $('#travel').addEventListener('change', (e) => { p.travel = e.target.value; commit(); });
     $('#group').addEventListener('change', (e) => { p.group = Math.min(12, Math.max(1, Math.round(Number(e.target.value)) || 1)); commit(); });
     $('#food').addEventListener('change', (e) => { p.food = Math.max(0, Number(e.target.value) || 0); commit(); });
     $('#from').addEventListener('change', (e) => { p.from = e.target.value; commit(); });
@@ -906,6 +1067,7 @@
         lodging: { camp: v.camp === '' ? null : v.camp === '0' ? 0 : Number(v.campRate) || 0, area: place, query: place, hotel: Number(v.hotel) || 220, airbnb: Number(v.airbnb) || 320, sleeps: 4 },
         ground: { airportMi, dailyMi: Math.min(airportMi, 8), transit: null, rentalDaily: eu ? 60 : 70, parking: eu ? 20 : 30 },
         stages: [], url, blurb: v.blurb || `${name} in ${place}. Added by you.`,
+        ...(coords ? { venue: coords } : {}),
       };
       S.custom.push(f);
       F.festivals.push(f);

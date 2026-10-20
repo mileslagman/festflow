@@ -47,11 +47,14 @@
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY));
-      if (s && s.plans && s.events) return s;
+      if (s && s.plans && s.events) return { custom: [], ...s };
     } catch (e) { /* storage unavailable */ }
-    return { profile: null, plans: {}, events: [] };
+    return { profile: null, plans: {}, events: [], custom: [] };
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
+
+  // Festivals the user added through lookup join the built-in catalog.
+  S.custom.forEach((f) => { if (!fest(f.id) && FL.airport(f.airport)) F.festivals.push(f); });
 
   const home = () => (S.profile && S.profile.home) || 'ATL';
   const defaultGround = (f) => (f.ground.transit ? 'transit' : 'rental');
@@ -204,7 +207,7 @@
     const g = (S.profile && S.profile.genres) || [];
     return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}"><span class="bar"></span>
       <div class="top"><div><h3>${esc(f.name)}</h3><div class="muted small">${esc(f.city)} · ${f.airport}</div></div>
-        ${planned ? '<span class="badge good">Planned</span>' : ''}</div>
+        ${planned ? '<span class="badge good">Planned</span>' : f.custom ? '<span class="badge info">Added by you</span>' : ''}</div>
       <div class="when">${fmtWeekends(f)} ${f.dateStatus === 'projected' ? '<span class="badge muted">projected</span>' : ''}</div>
       <div class="tags">${f.genres.map((x) => `<span class="tag ${g.includes(x) ? 'match' : ''}">${x}</span>`).join('')}</div>
       <div class="cost">
@@ -426,7 +429,8 @@
   function viewFestivals() {
     const months = [...new Set(F.festivals.flatMap((f) => f.weekends.map((w) => w[0].slice(0, 7))))].sort();
     view.innerHTML = `
-      <div class="page-head"><div><h1>Festivals</h1><p class="muted">Dates, tickets and estimated trip cost from ${home()}.</p></div></div>
+      <div class="page-head"><div><h1>Festivals</h1><p class="muted">Dates, tickets and estimated trip cost from ${home()}. Don't see yours? Search for it.</p></div>
+        <a class="btn primary" href="#/add">+ Add a festival</a></div>
       <div class="toolbar">
         <input type="search" id="q" placeholder="Search festivals or cities…" />
         <select id="genre"><option value="">All genres</option>${F.genres.map((g) => `<option>${g}</option>`).join('')}</select>
@@ -451,9 +455,19 @@
         flight: (f) => trip(f).flight.price, match: (f) => -f.genres.filter((x) => genres.includes(x)).length,
       }[sort];
       list = list.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
-      $('#fgrid').innerHTML = list.length ? list.map(festCard).join('') : '<div class="empty">No festivals match those filters.</div>';
+      const raw = $('#q').value.trim();
+      const lookupCard = raw ? `<a class="card fcard lookup-card" href="#/add/${encodeURIComponent(raw)}"><span class="bar" style="--c:#ffd27a"></span>
+          <h3>${list.length ? 'Looking for something else?' : `Can't find “${esc(raw)}”?`}</h3>
+          <p class="muted small" style="margin:0">Look up “${esc(raw)}” on Google and add it with its dates, tickets, flights, stays and calendar.</p>
+          <span class="btn primary sm" style="align-self:flex-start;margin-top:auto">✦ Look it up</span></a>` : '';
+      $('#fgrid').innerHTML = list.length || raw ? list.map(festCard).join('') + lookupCard : '<div class="empty">No festivals match those filters.</div>';
+      $('#fgrid').dataset.count = list.length;
     };
     $$('.toolbar input, .toolbar select').forEach((el) => el.addEventListener('input', draw));
+    $('#q').addEventListener('keydown', (e) => {
+      const raw = e.target.value.trim();
+      if (e.key === 'Enter' && raw && $('#fgrid').dataset.count === '0') location.hash = `#/add/${encodeURIComponent(raw)}`;
+    });
     draw();
   }
 
@@ -474,7 +488,8 @@
         <p style="max-width:640px;color:#d9d5ee">${esc(f.blurb)}</p>
         <div class="tags">${f.genres.map((x) => `<span class="tag ${g.includes(x) ? 'match' : ''}">${x}</span>`).join('')}</div>
         <div class="btn-row" style="margin-top:18px"><button class="btn primary" id="savePlan"></button>
-          <a class="btn ghost" href="${f.url}" target="_blank" rel="noopener">Official site & tickets ↗</a></div>
+          ${f.url ? `<a class="btn ghost" href="${esc(f.url)}" target="_blank" rel="noopener">Official site & tickets ↗</a>` : ''}
+          ${f.custom ? '<button class="btn ghost danger" id="removeFest">Remove festival</button>' : ''}</div>
       </div>
       ${f.dateStatus === 'projected' ? `<p class="notice" style="margin-top:12px"><b>Projected dates.</b> 2027 dates follow ${esc(f.name)}'s usual calendar and haven't been confirmed — check the official site before booking anything non-refundable.</p>` : ''}
 
@@ -719,6 +734,18 @@
       draw();
     });
 
+    if (f.custom) {
+      $('#removeFest').addEventListener('click', () => {
+        if (!confirm(`Remove ${f.name} from FestFlow? Its plan and calendar events go too.`)) return;
+        delete S.plans[id];
+        S.events = S.events.filter((e) => e.festId !== id);
+        S.custom = S.custom.filter((c) => c.id !== id);
+        F.festivals.splice(F.festivals.indexOf(f), 1);
+        save(); toast(`Removed ${f.name}`);
+        location.hash = '#/festivals';
+      });
+    }
+
     $('#setForm').addEventListener('submit', (ev) => {
       ev.preventDefault();
       const fd = new FormData(ev.target);
@@ -732,6 +759,162 @@
     });
 
     draw();
+  }
+
+  // ---------- add any festival (Google lookup + manual form) ----------
+  const CUSTOM_COLORS = ['#ff4fd8', '#27e6ff', '#ffd27a', '#b8ff5c', '#9b6bff', '#ff8a3d', '#5cf2c4'];
+
+  // Pick the next upcoming edition; if only past dates were found, repeat the same
+  // weekdays 52 weeks later until it's in the future.
+  function upcomingDates(found) {
+    const t0 = todayISO();
+    const future = found.filter((d) => d.end >= t0).sort((a, b) => a.start.localeCompare(b.start));
+    if (future.length) return { ...future[0], projected: false };
+    const past = found.sort((a, b) => b.start.localeCompare(a.start))[0];
+    if (!past) return null;
+    let { start, end } = past;
+    while (end < t0) { start = addDays(start, 364); end = addDays(end, 364); }
+    return { start, end, projected: true, from: past };
+  }
+
+  function viewAddFestival(q) {
+    q = (q || '').trim();
+    const g = (S.profile && S.profile.genres) || [];
+    let coords = null, cityLabel = '';
+    view.innerHTML = `
+      <div class="page-head"><div><h1>Add a festival</h1><p class="muted">Look up any festival on Google, check the details, and FestFlow plans it like the rest: flights, stays, rides and calendar.</p></div>
+        <a class="btn ghost" href="#/festivals">← All festivals</a></div>
+      <div class="card pad-lg">
+        <form id="lookupForm" style="display:flex;gap:10px;flex-wrap:wrap">
+          <input type="search" name="q" value="${esc(q)}" placeholder="Festival name, e.g. Imagine Music Festival" required style="flex:1 1 260px" />
+          <button class="btn primary" type="submit">✦ Look it up</button></form>
+        <div id="lookupStatus" style="margin-top:12px"></div>
+      </div>
+      <form class="card pad-lg section" id="addForm" autocomplete="off">
+        <h2 style="margin-bottom:16px">Festival details</h2>
+        <div class="form-grid">
+          <label class="field">Name<input name="name" required value="${esc(q)}" /></label>
+          <label class="field">City or venue<input name="loc" required placeholder="e.g. Atlanta Motor Speedway, GA" /></label>
+          <label class="field">First day<input name="start" type="date" required /></label>
+          <label class="field">Last day<input name="end" type="date" required /></label>
+          <label class="field">Nearest airport<select name="airport">${airportOptions(home())}</select></label>
+          <label class="field">Official website<input name="url" type="url" placeholder="https://" /></label>
+        </div>
+        <div class="muted small" id="airportHint" style="margin-top:8px"></div>
+        <label class="small muted" style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer">
+          <input type="checkbox" name="confirmed" style="width:auto" /> These dates are officially announced</label>
+
+        <h3 style="margin:22px 0 12px">Tickets & stay</h3>
+        <div class="form-grid">
+          <label class="field">GA ticket (USD)<input name="ga" type="number" min="0" step="1" value="300" required /></label>
+          <label class="field">VIP ticket (optional)<input name="vip" type="number" min="0" step="1" /></label>
+          <label class="field">Camping<select name="camp"><option value="">No camping</option><option value="0">Included with ticket</option><option value="paid">Paid camping</option></select></label>
+          <label class="field">Camping $/night<input name="campRate" type="number" min="0" step="5" value="60" /></label>
+          <label class="field">Hotel $/night (festival week)<input name="hotel" type="number" min="0" step="5" value="220" /></label>
+          <label class="field">Airbnb $/night (whole home)<input name="airbnb" type="number" min="0" step="5" value="320" /></label>
+          <label class="field">Gates open<input name="open" type="time" value="12:00" /></label>
+          <label class="field">Gates close<input name="close" type="time" value="23:00" /></label>
+        </div>
+        <div style="margin-top:16px"><div class="muted small" style="margin-bottom:8px">Genres</div>
+          <div class="chips">${F.genres.map((x) => `<span class="chip ${g.includes(x) ? 'on' : ''}" data-genre="${x}">${x}</span>`).join('')}</div></div>
+        <input type="hidden" name="blurb" />
+        <div class="btn-row" style="margin-top:22px"><button class="btn primary" type="submit">★ Add to FestFlow</button></div>
+        <p class="muted small" style="margin-bottom:0">Hotel, Airbnb and ticket numbers are starting estimates. Live hotel rates replace them on the festival page when a SerpApi key is set.</p>
+      </form>`;
+
+    const form = $('#addForm');
+    const status = $('#lookupStatus');
+    $$('.chip', form).forEach((c) => c.addEventListener('click', () => c.classList.toggle('on')));
+
+    async function placeIt(place) {
+      if (!place) return;
+      try {
+        // Venue names often aren't on the map, so fall back to the town: "Venue, Town, ST" → "Town, ST".
+        const parts = place.split(',').map((x) => x.trim()).filter(Boolean);
+        let r = { found: false };
+        for (let i = 0; i < parts.length && !r.found; i++) r = await FL.geocode(parts.slice(i).join(', '));
+        if (!r.found || !form.isConnected) { $('#airportHint').textContent = "Couldn't find that place on the map. Pick the nearest airport yourself."; return; }
+        coords = { lat: r.lat, lon: r.lon };
+        cityLabel = r.city || place;
+        const near = FL.nearestAirport(r.lat, r.lon);
+        form.airport.value = near.code;
+        $('#airportHint').innerHTML = `📍 ${esc(cityLabel)} · nearest airport <b style="color:var(--text)">${near.code}</b> (${near.mi} mi). Change it if a bigger airport nearby is cheaper.`;
+      } catch (e) {
+        $('#airportHint').textContent = 'Map lookup needs node server.js running. Pick the nearest airport yourself.';
+      }
+    }
+    form.loc.addEventListener('change', () => placeIt(form.loc.value.trim()));
+
+    async function runLookup(query) {
+      form.name.value = form.name.value || query;
+      if (!(await FL.liveStatus())) {
+        status.innerHTML = '<div class="notice"><b>Automatic lookup is off.</b> Add a SerpApi key to <code>festflow/.env</code> to fill this in from Google. For now, enter the details below.</div>';
+        return;
+      }
+      status.innerHTML = `<div class="live-card"><span class="badge info">● LIVE</span> <span class="muted small">Searching Google for “${esc(query)}”…</span></div>`;
+      try {
+        const r = await FL.lookup(query);
+        if (!form.isConnected) return;
+        if (r.name) form.name.value = r.name;
+        if (r.website) form.url.value = r.website;
+        if (r.location) form.loc.value = r.location;
+        if (r.price) form.ga.value = r.price;
+        form.blurb.value = (r.description || '').slice(0, 220);
+        const d = upcomingDates(r.dates || []);
+        if (d) { form.start.value = d.start; form.end.value = d.end; form.confirmed.checked = !d.projected; }
+        const found = [
+          r.location && `venue <b>${esc(r.location)}</b>`,
+          d && (d.projected ? `last edition <b>${fmtRange(d.from.start, d.from.end)}</b>, so next is projected for <b>${fmtRange(d.start, d.end)}</b>` : `dates <b>${fmtRange(d.start, d.end)}</b>`),
+          r.price && `tickets from about <b>${money(r.price)}</b>`,
+          r.website && 'official site',
+        ].filter(Boolean);
+        status.innerHTML = `<div class="live-card"><span class="badge good">● FOUND</span>
+          <span class="muted small">${found.length ? 'Filled in ' + found.join(', ') + '.' : "Google didn't return clear details. Fill in what's missing."} Check everything before saving.</span>
+          ${r.sources && r.sources.length ? `<div class="small" style="margin-top:8px">${r.sources.filter((x) => x.link).map((x) => `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title || x.link)} ↗</a>`).join('<br>')}</div>` : ''}</div>`;
+        placeIt(r.location || (r.name || query));
+      } catch (e) {
+        status.innerHTML = `<div class="notice"><b>Lookup failed:</b> ${esc(e.message)}. Enter the details below instead.</div>`;
+      }
+    }
+
+    $('#lookupForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const query = e.target.q.value.trim();
+      if (query) { form.name.value = ''; runLookup(query); }
+    });
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(form));
+      if (v.end < v.start) return toast('The last day is before the first day');
+      if (daysBetween(v.start, v.end) > 10) return toast('That date range is longer than 10 days');
+      const url = /^https?:\/\//i.test(v.url) ? v.url : '';
+      const ap = FL.airport(v.airport);
+      const eu = ap.region === 'EU';
+      const airportMi = coords ? Math.max(3, Math.round(FL.miles(ap, coords) * 1.25)) : 20;
+      const place = cityLabel || v.loc;
+      const name = v.name.trim();
+      const id = 'c-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) + '-' + uid().slice(-4);
+      const tickets = [{ tier: 'GA', price: Number(v.ga) || 0 }];
+      if (Number(v.vip)) tickets.push({ tier: 'VIP', price: Number(v.vip) });
+      const f = {
+        id, custom: true, name, city: place, airport: v.airport,
+        color: CUSTOM_COLORS[S.custom.length % CUSTOM_COLORS.length],
+        genres: $$('.chip.on', form).map((c) => c.dataset.genre),
+        weekends: [[v.start, v.end]], dateStatus: v.confirmed ? 'confirmed' : 'projected',
+        hours: [v.open || '12:00', v.close || '23:00'], tickets,
+        lodging: { camp: v.camp === '' ? null : v.camp === '0' ? 0 : Number(v.campRate) || 0, area: place, query: place, hotel: Number(v.hotel) || 220, airbnb: Number(v.airbnb) || 320, sleeps: 4 },
+        ground: { airportMi, dailyMi: Math.min(airportMi, 8), transit: null, rentalDaily: eu ? 60 : 70, parking: eu ? 20 : 30 },
+        stages: [], url, blurb: v.blurb || `${name} in ${place}. Added by you.`,
+      };
+      S.custom.push(f);
+      F.festivals.push(f);
+      save();
+      toast(`${name} added ✦`);
+      location.hash = `#/festival/${id}`;
+    });
+
+    if (q) runLookup(q);
   }
 
   function viewFlights() {
@@ -946,18 +1129,18 @@
     $('#ics').addEventListener('click', exportIcs);
     $('#reset').addEventListener('click', () => {
       if (!confirm('Delete your profile, plans and calendar from this browser?')) return;
-      S = { profile: null, plans: {}, events: [] }; save();
+      S = { profile: null, plans: {}, events: [], custom: [] }; save();
       location.hash = '#/';
-      render();
+      location.reload();
     });
   }
 
   // ---------- router ----------
-  const routes = { '': viewDashboard, festivals: viewFestivals, festival: viewFestival, flights: viewFlights, calendar: viewCalendar, profile: viewProfile };
+  const routes = { '': viewDashboard, festivals: viewFestivals, festival: viewFestival, add: viewAddFestival, flights: viewFlights, calendar: viewCalendar, profile: viewProfile };
   function render() {
     const [, name = '', arg] = location.hash.split('/');
     const fn = routes[name] || viewDashboard;
-    const navKey = name === '' ? 'dashboard' : name === 'festival' ? 'festivals' : name;
+    const navKey = name === '' ? 'dashboard' : name === 'festival' || name === 'add' ? 'festivals' : name;
     $$('.nav a[data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === navKey));
     fn(arg && decodeURIComponent(arg));
     if (window.FX) { FX.pageEnter(view); FX.tickCountdowns(); }

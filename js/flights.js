@@ -128,6 +128,18 @@
   const live = (from, to, depart, ret) => getLive('api/fares', { from, to, depart, ret });
   const liveStays = (q, checkin, checkout, adults, rentals) =>
     getLive('api/stays', { q, checkin, checkout, adults, rentals: rentals ? 1 : 0 });
+  const lookup = (q) => getLive('api/lookup', { q });
+  const geocode = (q) => getLive('api/geocode', { q }); // free, works without a SerpApi key
 
-  F.flights = { airport, estimate, trend, links, sweetSpot, liveStatus, live, liveStays };
+  function nearestAirport(lat, lon) {
+    const here = { lat, lon };
+    let best = null;
+    for (const a of F.airports) {
+      const d = miles(here, a);
+      if (!best || d < best.mi) best = { code: a.code, mi: Math.round(d) };
+    }
+    return best;
+  }
+
+  F.flights = { airport, miles, estimate, trend, links, sweetSpot, liveStatus, live, liveStays, lookup, geocode, nearestAirport };
 })();

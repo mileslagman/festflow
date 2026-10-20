@@ -30,6 +30,9 @@ How searches are spent:
 - **Flights page:** looks up a fare only when you tap "Live price" on a row.
 - Each search is cached for 6 hours in `.fare-cache.json`, so reloading pages doesn't spend searches.
 
+- **Festival lookup:** searching for a festival that isn't built in offers "Look it up". That runs one Google search, which fills in the name, dates, venue, website and ticket price when Google shows them. If Google only shows a past edition, the next one is projected for the same weekdays a year later. You review the details before saving.
+- **Map lookups** (finding the nearest airport to a venue) use OpenStreetMap and don't need a key.
+
 Without a key, the app falls back to its built-in estimates and shows links to Google Flights, Kayak, Skyscanner, Google Hotels, Booking.com, Airbnb and Vrbo.
 
 ## Data notes
@@ -39,4 +42,4 @@ Without a key, the app falls back to its built-in estimates and shows links to G
 - **Stays:** estimated festival-week rates per night, in `js/data.js`. Hotels assume 2 people per room, and Airbnb homes sleep 4–6 depending on the area. Stay costs are split across your group.
 - **Uber/Lyft:** modeled at about $5.50 + $2.80 per mile, with a 1.2× festival bump and about 2× surge when leaving at close, and 4 people per car. Rides cost about 20% less in Europe.
 - **Rental car:** daily rate plus about 30% for taxes and fees, gas at 28 mpg, and festival parking per day. It assumes 5 people per car. If you're camping, the car stays at the campsite, so there's no daily driving or parking.
-- **Your data:** your profile, plans and calendar are stored in your browser's localStorage.
+- **Your data:** your profile, plans, calendar and the festivals you add are stored in your browser's localStorage.

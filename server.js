@@ -118,6 +118,91 @@ async function stays(q) {
   return cached(['stays', query, q.checkin, q.checkout, adults, rentals].join('|'), () => fetchStays(args));
 }
 
+// ---------- festival lookup (Google search via SerpApi) ----------
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const MON = '(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const pad = (n) => String(n).padStart(2, '0');
+const isoOf = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+
+// Finds date ranges like "Sep 3 – 5, 2027", "May 29-31 2027" or "Aug 29 - Sep 1, 2026".
+function findDates(text) {
+  const out = [];
+  const range = new RegExp(`${MON}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:-|–|—|to|through|thru)\\s*(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\\s*)?(?:${MON}\\s+)?(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(20\\d\\d)`, 'gi');
+  let m;
+  while ((m = range.exec(text))) {
+    const m1 = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
+    const m2 = m[3] ? MONTHS.indexOf(m[3].slice(0, 3).toLowerCase()) : m1;
+    const y = Number(m[5]), d1 = Number(m[2]), d2 = Number(m[4]);
+    if (m1 < 0 || m2 < 0 || d1 > 31 || d2 > 31) continue;
+    const start = isoOf(y, m1, d1), end = isoOf(m2 < m1 ? y + 1 : y, m2, d2);
+    const span = (new Date(end) - new Date(start)) / 864e5;
+    if (span >= 0 && span <= 10) out.push({ start, end });
+  }
+  return out;
+}
+
+function findPrices(texts) {
+  for (const t of texts) {
+    if (!/ticket|pass|\bga\b|general admission/i.test(t)) continue;
+    for (const m of t.matchAll(/\$\s?(\d{2,4})(?:\.\d{2})?/g)) {
+      const v = Number(m[1]);
+      if (v >= 60 && v <= 2500) return v;
+    }
+  }
+  return null;
+}
+
+const SKIP_SITES = /wikipedia|facebook|instagram|twitter|x\.com|tiktok|youtube|reddit|ticketmaster|stubhub|seatgeek\.com|vividseats|gametime|songkick|bandsintown|eventbrite|axs\.com|jambase|festivalfans|setlist/i;
+
+async function fetchLookup(q) {
+  const j = await serp({ engine: 'google', q: `${q} music festival dates tickets`, num: '10' });
+  const kg = j.knowledge_graph || {};
+  const ev = (j.events_results || [])[0] || null;
+  const organic = j.organic_results || [];
+  const snippets = organic.slice(0, 8).map((r) => `${r.title || ''}. ${r.snippet || ''} ${(r.rich_snippet && JSON.stringify(r.rich_snippet)) || ''}`);
+  const texts = [
+    kg.dates, kg.date, kg.start_date, kg.event_dates, ev && ev.date && ev.date.when, ev && ev.date && ev.date.start_date,
+    j.answer_box && (j.answer_box.answer || j.answer_box.snippet), kg.description, ...snippets,
+  ].filter((x) => typeof x === 'string');
+  const dates = texts.flatMap(findDates);
+  const official = organic.find((r) => r.link && !SKIP_SITES.test(r.link));
+  return {
+    query: q,
+    name: kg.title || (ev && ev.title) || null,
+    description: kg.description || (organic[0] && organic[0].snippet) || '',
+    website: kg.website || (official && official.link) || null,
+    location: kg.location || kg.address || kg.venue || (ev && Array.isArray(ev.address) ? ev.address.join(', ') : null),
+    dates,
+    price: findPrices(texts),
+    sources: organic.slice(0, 3).map((r) => ({ title: r.title, link: r.link })),
+    fetchedAt: Date.now(),
+  };
+}
+
+async function lookup(q) {
+  const query = String(q.q || '').trim();
+  if (!query || query.length > 80 || /[<>{}]/.test(query)) throw httpError(400, 'Expected q (festival name)');
+  return cached(['lookup', query.toLowerCase()].join('|'), () => fetchLookup(query));
+}
+
+// ---------- geocoding (OpenStreetMap Nominatim, no key) ----------
+async function geocode(q) {
+  const query = String(q.q || '').trim();
+  if (!query || query.length > 120) throw httpError(400, 'Expected q (place)');
+  return cached(['geo', query.toLowerCase()].join('|'), async () => {
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.search = new URLSearchParams({ q: query, format: 'jsonv2', limit: '1', addressdetails: '1' });
+    const r = await fetch(url, { headers: { 'User-Agent': 'FestFlow/1.0 (personal festival planner)', 'Accept-Language': 'en' } });
+    if (!r.ok) throw httpError(502, `Geocoder returned ${r.status}`);
+    const [hit] = await r.json();
+    if (!hit) return { found: false, fetchedAt: Date.now() };
+    const a = hit.address || {};
+    const town = a.city || a.town || a.village || a.hamlet || a.county || '';
+    const region = a.country_code === 'us' ? (a['ISO3166-2-lvl4'] || '').replace('US-', '') : a.country || '';
+    return { found: true, lat: Number(hit.lat), lon: Number(hit.lon), city: [town, region].filter(Boolean).join(', '), fetchedAt: Date.now() };
+  });
+}
+
 function cached(k, load) {
   const hit = cache[k];
   if (hit && Date.now() - hit.fetchedAt < TTL) return Promise.resolve({ ...hit, cached: true });
@@ -137,7 +222,11 @@ function json(res, status, body) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (u.pathname === '/api/status') return json(res, 200, { live: !!KEY, provider: KEY ? 'Google Flights & Hotels via SerpApi' : null });
-  const handler = { '/api/fares': fares, '/api/stays': stays }[u.pathname];
+  if (u.pathname === '/api/geocode') {
+    try { return json(res, 200, await geocode(Object.fromEntries(u.searchParams))); }
+    catch (e) { console.error('[/api/geocode]', e.message); return json(res, e.status || 500, { error: e.message }); }
+  }
+  const handler = { '/api/fares': fares, '/api/stays': stays, '/api/lookup': lookup }[u.pathname];
   if (handler) {
     if (!KEY) return json(res, 503, { error: 'Live prices are off: no SERPAPI_KEY set.' });
     try { return json(res, 200, await handler(Object.fromEntries(u.searchParams))); }

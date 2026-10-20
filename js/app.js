@@ -202,7 +202,7 @@
     const t = trip(f);
     const planned = !!S.plans[f.id];
     const g = (S.profile && S.profile.genres) || [];
-    return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}">
+    return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}"><span class="bar"></span>
       <div class="top"><div><h3>${esc(f.name)}</h3><div class="muted small">${esc(f.city)} · ${f.airport}</div></div>
         ${planned ? '<span class="badge good">Planned</span>' : ''}</div>
       <div class="when">${fmtWeekends(f)} ${f.dateStatus === 'projected' ? '<span class="badge muted">projected</span>' : ''}</div>
@@ -258,16 +258,17 @@
     if (est.daysOut >= 0 && est.daysOut <= maxD) {
       const cx = x(est.daysOut), cy = y(est.price);
       now = `<line x1="${cx}" x2="${cx}" y1="${pt}" y2="${H - pb}" stroke="#fff" stroke-opacity=".35" stroke-dasharray="3 3"/>
-        <circle cx="${cx}" cy="${cy}" r="5" fill="#fff" stroke="#ff5fa2" stroke-width="3"/>
+        <circle cx="${cx}" cy="${cy}" r="5" fill="#fff" stroke="#ff4fd8" stroke-width="3" style="filter:drop-shadow(0 0 6px #ff4fd8)"/>
         <text x="${cx}" y="${pt - 3}" text-anchor="middle" style="fill:#fff;font-weight:600">Today</text>`;
     }
     return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Estimated fare by days before departure">
-      <defs><linearGradient id="fareFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#7c5cff" stop-opacity=".45"/><stop offset="1" stop-color="#7c5cff" stop-opacity="0"/></linearGradient></defs>
-      <rect x="${x(s2)}" y="${pt}" width="${x(s1) - x(s2)}" height="${H - pt - pb}" fill="#3ddc97" fill-opacity=".09"/>
-      <text x="${(x(s1) + x(s2)) / 2}" y="${H - pb - 6}" text-anchor="middle" style="fill:#3ddc97">sweet spot</text>
+      <defs><linearGradient id="fareFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ff4fd8" stop-opacity=".35"/><stop offset="1" stop-color="#9b6bff" stop-opacity="0"/></linearGradient>
+        <linearGradient id="fareLine" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#ffd27a"/><stop offset=".5" stop-color="#ff4fd8"/><stop offset="1" stop-color="#27e6ff"/></linearGradient></defs>
+      <rect x="${x(s2)}" y="${pt}" width="${x(s1) - x(s2)}" height="${H - pt - pb}" fill="#4dffb0" fill-opacity=".08"/>
+      <text x="${(x(s1) + x(s2)) / 2}" y="${H - pb - 6}" text-anchor="middle" style="fill:#4dffb0">sweet spot</text>
       ${yt}${xt}
       <path d="${area}" fill="url(#fareFill)"/>
-      <path d="${line}" fill="none" stroke="#b9a6ff" stroke-width="2.5" stroke-linejoin="round"/>
+      <path class="fare-line" d="${line}" fill="none" stroke="url(#fareLine)" stroke-width="2.5" stroke-linejoin="round"/>
       ${now}
     </svg></div>`;
   }
@@ -351,6 +352,7 @@
   // ---------- views ----------
   function viewOnboard() {
     view.innerHTML = `<div class="onboard">
+      <div class="ornament">✦</div>
       <h1>Every festival, <span class="grad-text">one plan.</span></h1>
       <p class="muted" style="font-size:17px">Dates, ticket prices, flight estimates from your home airport, set-time planning and a calendar — all in one place. Tell us a bit about you to personalize it.</p>
       <form class="card pad-lg" id="pf" style="margin-top:22px">${profileFields({})}
@@ -370,7 +372,6 @@
     const pct = p.budget ? Math.min(100, (total / p.budget) * 100) : 0;
     const left = p.budget - total;
     const agenda = upcomingAgenda(7);
-    const nextDays = next ? daysBetween(t0, next.t.start) : null;
 
     view.innerHTML = `
       <div class="page-head"><div><h1>Hey ${esc(p.name)} <span class="grad-text">✦</span></h1>
@@ -379,7 +380,7 @@
 
       <div class="grid g4">
         <div class="card stat"><div class="label">Next festival</div>
-          ${next ? `<div class="countdown" style="margin-top:8px"><span class="n">${Math.max(nextDays, 0)}</span><span class="muted">${nextDays > 0 ? 'days to go' : 'happening now!'}</span></div>
+          ${next ? `<div class="countdown" style="margin-top:10px" data-to="${next.t.start}T${next.f.hours[0]}:00"></div>
           <div class="sub" style="margin-top:6px"><span class="dot" style="--c:${next.f.color}"></span> ${esc(next.f.name)}</div>` : '<div class="value">—</div><div class="sub">Nothing planned yet</div>'}</div>
         <div class="card stat"><div class="label">Planned spend</div><div class="value">${money(total)}</div>
           <div class="sub">tickets, flights, stay & food</div></div>
@@ -408,7 +409,7 @@
 
   function tripCard(f, t) {
     const fl = t.flight;
-    return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}">
+    return `<a class="card fcard" style="--c:${f.color}" href="#/festival/${f.id}"><span class="bar"></span>
       <div class="top"><div><h3>${esc(f.name)}</h3><div class="muted small">${fmtRange(t.start, t.end)} · ${esc(f.city)}</div></div>
         ${fl.local ? '<span class="badge muted">local</span>' : `<span class="badge ${fl.tone}">${fl.status.split(' — ')[0]}</span>`}</div>
       <div class="cost">
@@ -702,7 +703,7 @@
     $('#food').addEventListener('change', (e) => { p.food = Math.max(0, Number(e.target.value) || 0); commit(); });
     $('#from').addEventListener('change', (e) => { p.from = e.target.value; commit(); });
 
-    $('#savePlan').addEventListener('click', () => {
+    $('#savePlan').addEventListener('click', (ev) => {
       if (planned()) {
         const sets = S.events.filter((e) => e.festId === id && !e.auto).length;
         if (!confirm(`Remove ${f.name} from your plan?${sets ? ` Your ${plural(sets, 'saved set')} will be removed too.` : ''}`)) return;
@@ -712,6 +713,7 @@
       } else {
         S.plans[id] = { ...p };
         syncAutoEvents(f);
+        if (window.FX) FX.burst(ev.clientX, ev.clientY);
         toast(`${f.name} saved — flights & booking reminder added to your calendar`);
       }
       draw();
@@ -958,6 +960,7 @@
     const navKey = name === '' ? 'dashboard' : name === 'festival' ? 'festivals' : name;
     $$('.nav a[data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === navKey));
     fn(arg && decodeURIComponent(arg));
+    if (window.FX) { FX.pageEnter(view); FX.tickCountdowns(); }
   }
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
   render();

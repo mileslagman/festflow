@@ -3,27 +3,52 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#06030f" />
   <title>FestFlow</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@600;700;800&family=Orbitron:wght@500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <canvas id="burst" aria-hidden="true"></canvas>
+
   <div class="shell">
     <nav class="nav">
-      <a class="brand" href="#/"><span class="logo">◐</span><span>FestFlow</span></a>
-      <a href="#/" data-route="dashboard"><span class="ico">⌂</span><span>Dashboard</span></a>
+      <a class="brand" href="#/">
+        <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#ffd27a" /><stop offset=".45" stop-color="#ff4fd8" /><stop offset="1" stop-color="#27e6ff" />
+            </linearGradient>
+          </defs>
+          <g fill="none" stroke="url(#logoGrad)" stroke-width="2.2" stroke-linejoin="round">
+            <g class="logo-spin">
+              <path d="M32 4 L38 26 L60 32 L38 38 L32 60 L26 38 L4 32 L26 26 Z" />
+              <path d="M32 14 L36 28 L50 32 L36 36 L32 50 L28 36 L14 32 L28 28 Z" opacity=".7" transform="rotate(45 32 32)" />
+            </g>
+            <circle cx="32" cy="32" r="27" opacity=".35" />
+          </g>
+          <circle cx="32" cy="32" r="4.5" fill="url(#logoGrad)" />
+        </svg>
+        <span class="brand-name">FestFlow</span>
+      </a>
+      <a href="#/" data-route="dashboard"><span class="ico">✧</span><span>Dashboard</span></a>
       <a href="#/festivals" data-route="festivals"><span class="ico">♫</span><span>Festivals</span></a>
       <a href="#/flights" data-route="flights"><span class="ico">✈</span><span>Flights</span></a>
-      <a href="#/calendar" data-route="calendar"><span class="ico">▦</span><span>Calendar</span></a>
-      <a href="#/profile" data-route="profile"><span class="ico">☺</span><span>Profile</span></a>
+      <a href="#/calendar" data-route="calendar"><span class="ico">☾</span><span>Calendar</span></a>
+      <a href="#/profile" data-route="profile"><span class="ico">✦</span><span>Profile</span></a>
+      <div class="nav-eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
     </nav>
     <main id="view" class="view"></main>
   </div>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="js/data.js"></script>
   <script src="js/flights.js"></script>
+  <script src="js/fx.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

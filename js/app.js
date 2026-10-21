@@ -188,6 +188,71 @@
     return { start, end, depart, ret, days, nights, ticket, flight, travel, drive, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
   }
 
+  // ---------- crew + cost split ----------
+  const CREW_COLORS = ['#ff4fd8', '#27e6ff', '#ffd27a', '#b8ff5c', '#9b6bff', '#ff8a3d'];
+  const money2 = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Keeps the crew list in step with the group size. The first member is you.
+  function syncCrew(p) {
+    const me = (S.profile && S.profile.name) || 'You';
+    const crew = p.crew || { members: [{ id: 'you', name: me }], items: {}, extras: [] };
+    crew.members = crew.members.slice(0, Math.max(1, p.group));
+    while (crew.members.length < p.group) crew.members.push({ id: uid(), name: `Friend ${crew.members.length + 1}` });
+    const ids = new Set(crew.members.map((m) => m.id));
+    const clean = (it) => {
+      if (!ids.has(it.paidBy)) it.paidBy = crew.members[0].id;
+      // null means "everyone", so new members are included automatically
+      if (it.among) { it.among = it.among.filter((x) => ids.has(x)); if (!it.among.length) it.among = null; }
+      return it;
+    };
+    Object.values(crew.items).forEach(clean);
+    crew.extras.forEach(clean);
+    p.crew = crew;
+    return crew;
+  }
+
+  // Shared costs come from the plan (stay, gas, ground transport) plus any extras.
+  // Tickets, flights and food are personal: everyone pays their own.
+  function crewSplit(f, p, t) {
+    const crew = syncCrew(p);
+    const members = crew.members;
+    const auto = [];
+    if (t.stay.total) auto.push({ key: 'stay', label: `${t.stay.label} · ${plural(t.nights, 'night')}`, amount: t.stay.total });
+    if (t.travel.mode === 'drive') auto.push({ key: 'gas', label: 'Gas to drive there & back', amount: t.travel.total });
+    if (t.ground.total) auto.push({ key: 'ground', label: t.ground.mode === 'car' ? 'Your car: local gas & parking' : t.ground.label, amount: t.ground.total });
+    const items = [
+      ...auto.map((a) => ({ ...a, auto: true, ...(crew.items[a.key] = crew.items[a.key] || { paidBy: members[0].id, among: null }) })),
+      ...crew.extras.map((x) => ({ ...x, key: x.id, auto: false })),
+    ].map((it) => ({ ...it, who: it.among || members.map((m) => m.id) }));
+
+    const personal = t.ticket + (t.travel.mode === 'fly' && !t.flight.local ? t.flight.price : 0) + t.food;
+    const per = Object.fromEntries(members.map((m) => [m.id, { ...m, personal, shared: 0, paid: 0 }]));
+    for (const it of items) {
+      const share = it.amount / it.who.length;
+      it.share = share;
+      it.who.forEach((id) => { if (per[id]) per[id].shared += share; });
+      if (per[it.paidBy]) per[it.paidBy].paid += it.amount;
+    }
+    const rows = members.map((m) => {
+      const r = per[m.id];
+      return { ...r, total: r.personal + r.shared, balance: r.paid - r.shared };
+    });
+
+    // Fewest payments: biggest debtor pays biggest creditor until everyone is square.
+    const debt = rows.filter((r) => r.balance < -0.005).map((r) => ({ id: r.id, name: r.name, amt: -r.balance })).sort((a, b) => b.amt - a.amt);
+    const cred = rows.filter((r) => r.balance > 0.005).map((r) => ({ id: r.id, name: r.name, amt: r.balance })).sort((a, b) => b.amt - a.amt);
+    const transfers = [];
+    let i = 0, j = 0;
+    while (i < debt.length && j < cred.length) {
+      const amt = Math.min(debt[i].amt, cred[j].amt);
+      if (amt > 0.005) transfers.push({ from: debt[i].name, to: cred[j].name, amount: amt });
+      debt[i].amt -= amt; cred[j].amt -= amt;
+      if (debt[i].amt < 0.005) i++;
+      if (cred[j].amt < 0.005) j++;
+    }
+    return { members, items, rows, transfers, personal, sharedTotal: items.reduce((x, it) => x + it.amount, 0) };
+  }
+
   // Flight + booking-reminder events generated from a saved plan.
   function syncAutoEvents(f) {
     S.events = S.events.filter((e) => !(e.festId === f.id && e.auto));
@@ -589,6 +654,8 @@
         <div class="card pad-lg"><h2 style="margin-bottom:4px">Getting around</h2><div id="groundBox"></div></div>
       </div>
 
+      <div class="section"><h2>Crew & cost split</h2><div class="card pad-lg" id="crewBox"></div></div>
+
       <div class="section"><h2>Set-time planner</h2>
         <div class="card pad-lg">
           <p class="muted small" style="margin-top:0">Lineups and set times drop a few weeks before the festival. Add the sets you want to catch and FestFlow flags clashes and puts them on your calendar.</p>
@@ -605,6 +672,7 @@
       </div>`;
 
     const commit = () => {
+      syncCrew(p);
       if (planned()) { S.plans[id] = { ...p }; syncAutoEvents(f); }
       draw();
     };
@@ -625,6 +693,7 @@
       drawTravel(t);
       drawStay(t);
       drawGround(t);
+      drawCrew(t);
       drawSets(t);
     }
 
@@ -726,6 +795,126 @@
           <a class="btn sm" target="_blank" rel="noopener" href="https://www.kayak.com/cars/${f.airport}/${t.depart}/${t.ret}">Rental cars on Kayak ↗</a>
         </div>`;
       bindTiles($('#groundBox'));
+    }
+
+    function drawCrew(t) {
+      const box = $('#crewBox');
+      const c = crewSplit(f, p, t);
+      const name = (mid) => (c.members.find((m) => m.id === mid) || {}).name || '?';
+      const paidOpts = (sel) => c.members.map((m) => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+      const whoChips = (it) => c.members.map((m) => `<button type="button" class="who ${it.who.includes(m.id) ? 'on' : ''}" data-item="${it.key}" data-auto="${it.auto ? 1 : 0}" data-m="${m.id}" title="${esc(m.name)}">${esc(m.name.slice(0, 12))}</button>`).join('');
+
+      if (c.members.length === 1) {
+        box.innerHTML = `<div class="empty" style="text-align:left;display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+          <span>Going with friends? Add them to split the stay, gas, rides and anything else, and see who owes who.</span>
+          <button class="btn primary" id="crewStart">+ Add people</button></div>`;
+        $('#crewStart').addEventListener('click', () => { p.group = 2; commit(); });
+        return;
+      }
+
+      box.innerHTML = `
+        <div class="crew-members">
+          ${c.members.map((m, i) => `<span class="crew-m"><span class="avatar" style="--c:${CREW_COLORS[i % CREW_COLORS.length]}">${esc((m.name.trim()[0] || '?').toUpperCase())}</span>
+            <input data-rename="${m.id}" value="${esc(m.name)}" maxlength="24" aria-label="Name" />
+            ${i ? `<button class="x" data-drop="${m.id}" title="Remove">×</button>` : ''}</span>`).join('')}
+          ${c.members.length < 12 ? '<button class="btn sm" id="crewAdd">+ Add person</button>' : ''}
+        </div>
+
+        <h3 style="margin:22px 0 10px">Shared costs <span class="muted small" style="font-family:Inter;font-weight:400">· pick who paid and who's in</span></h3>
+        <div class="table-wrap"><table class="crew-table">
+          <thead><tr><th>Cost</th><th>Amount</th><th>Paid by</th><th>Split between</th><th>Each</th><th></th></tr></thead>
+          <tbody>
+            ${c.items.map((it) => `<tr>
+              <td><b>${esc(it.label)}</b>${it.auto ? '<div class="muted small">from your plan</div>' : ''}</td>
+              <td class="price">${money(it.amount)}</td>
+              <td><select data-paid="${it.key}" data-auto="${it.auto ? 1 : 0}">${paidOpts(it.paidBy)}</select></td>
+              <td><div class="whos">${whoChips(it)}</div></td>
+              <td>${money2(it.share)}</td>
+              <td>${it.auto ? '' : `<button class="x" data-del-extra="${it.key}" title="Remove">×</button>`}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No shared costs yet.</td></tr>'}
+          </tbody></table></div>
+        <form id="extraForm" class="form-grid" style="margin-top:14px;align-items:end">
+          <label class="field">Other expense<input name="label" required maxlength="40" placeholder="Groceries, cabana, parking pass…" /></label>
+          <label class="field">Amount (USD)<input name="amount" type="number" min="0.01" step="0.01" required /></label>
+          <label class="field">Paid by<select name="paidBy">${paidOpts(c.members[0].id)}</select></label>
+          <button class="btn" type="submit">+ Add expense</button>
+        </form>
+
+        <h3 style="margin:24px 0 10px">Each person</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Who</th><th>Own costs</th><th>Share of shared</th><th>Trip total</th><th>Paid upfront</th><th>Balance</th></tr></thead>
+          <tbody>${c.rows.map((r) => `<tr>
+            <td><b>${esc(r.name)}</b></td><td>${money(r.personal)}</td><td>${money2(r.shared)}</td>
+            <td class="price">${money(r.total)}</td><td>${money2(r.paid)}</td>
+            <td>${Math.abs(r.balance) < 0.005 ? '<span class="badge muted">square</span>' : r.balance > 0 ? `<span class="badge good">gets back ${money2(r.balance)}</span>` : `<span class="badge bad">owes ${money2(-r.balance)}</span>`}</td></tr>`).join('')}</tbody>
+        </table></div>
+        <p class="muted small">Own costs are each person's ticket${t.travel.mode === 'fly' && !t.flight.local ? ', flight' : ''} and food, which everyone pays themselves.</p>
+
+        <div class="settle">
+          <h3 style="margin:0 0 10px">Settle up</h3>
+          ${c.transfers.length ? c.transfers.map((x) => `<div class="pay"><b>${esc(x.from)}</b><span class="arrow">→</span><b>${esc(x.to)}</b><span class="amt">${money2(x.amount)}</span></div>`).join('')
+            : '<div class="muted">Everyone is square. Set "Paid by" on each cost once someone books it.</div>'}
+          <div class="btn-row" style="margin-top:14px"><button class="btn sm" id="crewCopy">⧉ Copy summary for the group chat</button></div>
+        </div>`;
+
+      // members
+      $$('[data-rename]', box).forEach((el) => el.addEventListener('change', () => {
+        const m = p.crew.members.find((x) => x.id === el.dataset.rename);
+        if (m) { m.name = el.value.trim() || m.name; commit(); }
+      }));
+      $$('[data-drop]', box).forEach((b) => b.addEventListener('click', () => {
+        p.crew.members = p.crew.members.filter((m) => m.id !== b.dataset.drop);
+        p.group = p.crew.members.length;
+        commit();
+      }));
+      const add = $('#crewAdd');
+      if (add) add.addEventListener('click', () => { p.group = Math.min(12, p.group + 1); commit(); });
+
+      // shared items
+      const itemOf = (key, isAuto) => (isAuto === '1' ? p.crew.items[key] : p.crew.extras.find((x) => x.id === key));
+      $$('[data-paid]', box).forEach((el) => el.addEventListener('change', () => {
+        const it = itemOf(el.dataset.paid, el.dataset.auto);
+        if (it) { it.paidBy = el.value; commit(); }
+      }));
+      $$('.who', box).forEach((b) => b.addEventListener('click', () => {
+        const it = itemOf(b.dataset.item, b.dataset.auto);
+        if (!it) return;
+        const all = p.crew.members.map((m) => m.id);
+        let who = it.among ? [...it.among] : all;
+        who = who.includes(b.dataset.m) ? who.filter((x) => x !== b.dataset.m) : [...who, b.dataset.m];
+        if (!who.length) return toast('At least one person has to cover each cost');
+        it.among = who.length === all.length ? null : who;
+        commit();
+      }));
+      $$('[data-del-extra]', box).forEach((b) => b.addEventListener('click', () => {
+        p.crew.extras = p.crew.extras.filter((x) => x.id !== b.dataset.delExtra);
+        commit();
+      }));
+      $('#extraForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = Object.fromEntries(new FormData(e.target));
+        const amount = Math.round(Number(v.amount) * 100) / 100;
+        if (!(amount > 0)) return;
+        p.crew.extras.push({ id: uid(), label: v.label.trim(), amount, paidBy: v.paidBy, among: null });
+        commit();
+        toast('Expense added to the split');
+      });
+
+      $('#crewCopy').addEventListener('click', async () => {
+        const lines = [
+          `${f.name} · ${fmtRange(t.start, t.end)} — cost split for ${c.members.length} (FestFlow)`,
+          '',
+          'Shared costs:',
+          ...c.items.map((it) => `• ${it.label}: ${money(it.amount)}, paid by ${name(it.paidBy)}, split ${it.who.length} ways (${money2(it.share)} each)`),
+          '',
+          'Trip total per person:',
+          ...c.rows.map((r) => `• ${r.name}: ${money(r.total)} (incl. ${money(r.personal)} own ticket${t.travel.mode === 'fly' && !t.flight.local ? '/flight' : ''}/food)`),
+          '',
+          'Settle up:',
+          ...(c.transfers.length ? c.transfers.map((x) => `• ${x.from} pays ${x.to} ${money2(x.amount)}`) : ['• Everyone is square']),
+        ];
+        try { await navigator.clipboard.writeText(lines.join('\n')); toast('Summary copied: paste it in your group chat'); }
+        catch (err) { toast("Couldn't copy. Your browser blocked clipboard access"); }
+      });
     }
 
     function drawBreakdown() {
@@ -876,6 +1065,7 @@
     $('#ground').addEventListener('change', (e) => { p.ground = e.target.value; commit(); });
     $('#travel').addEventListener('change', (e) => { p.travel = e.target.value; commit(); });
     $('#group').addEventListener('change', (e) => { p.group = Math.min(12, Math.max(1, Math.round(Number(e.target.value)) || 1)); commit(); });
+    syncCrew(p);
     $('#food').addEventListener('change', (e) => { p.food = Math.max(0, Number(e.target.value) || 0); commit(); });
     $('#from').addEventListener('change', (e) => { p.from = e.target.value; commit(); });
 

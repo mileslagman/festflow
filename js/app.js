@@ -99,6 +99,15 @@
     if (p.lodging === 'camp' && L.camp != null) {
       return { kind: 'camp', label: 'Camping', units: group, unitLabel: 'campsite pass', rate: L.camp, total: L.camp * nights * group };
     }
+    if (p.lodging === 'own') {
+      const own = p.ownStay || {};
+      const amount = Math.max(0, Number(own.amount) || 0);
+      const total = own.basis === 'night' ? amount * nights : amount;
+      return {
+        kind: 'own', own: true, set: amount > 0, rate: total / nights, units: 1, total,
+        label: (own.label || '').trim() || 'Your own price', unitLabel: 'place',
+      };
+    }
     const kind = p.lodging === 'airbnb' ? 'airbnb' : 'hotel';
     const ls = p.liveStay;
     const live = ls && ls.kind === kind && ls.depart === depart && ls.ret === ret && ls.group === group && ls.nightly != null;
@@ -553,7 +562,7 @@
         ${t.travel.mode === 'drive'
           ? `<span>Drive ${Math.round(t.travel.miles)} mi each way <b>${money(t.travel.price)}</b> gas</span>`
           : `<span>Flight ${t.from}→${f.airport} <b>${fl.local ? '—' : money(fl.price)}</b>${fl.live ? ' <span class="badge good">live</span>' : ''}</span>`}
-        <span>${t.stay.label} ×${t.nights} <b>${t.lodging ? money(t.lodging) : 'incl.'}</b>${t.stay.live ? ' <span class="badge good">live</span>' : ''}</span>
+        <span>${esc(t.stay.label)} ×${t.nights} <b>${t.lodging ? money(t.lodging) : 'incl.'}</b>${t.stay.live ? ' <span class="badge good">live</span>' : ''}</span>
         <span>${esc(t.ground.label)} <b>${money(t.transport)}</b></span>
         <span>Food <b>${money(t.food)}</b></span>
       </div>
@@ -636,7 +645,7 @@
             <label class="field">Group size<input id="group" type="number" min="1" max="12" step="1" /></label>
             <label class="field">Stay<select id="lodging">
               ${f.lodging.camp != null ? `<option value="camp">Camping</option>` : ''}
-              <option value="hotel">Hotel</option><option value="airbnb">Airbnb / vacation rental</option></select></label>
+              <option value="hotel">Hotel</option><option value="airbnb">Airbnb / vacation rental</option><option value="own">Your own price</option></select></label>
             <label class="field">Getting there<select id="travel"><option value="fly">Fly</option><option value="drive">Drive</option></select></label>
             <label class="field">Getting around<select id="ground"><option value="car" hidden>Your car</option>
               <option value="rideshare">Uber / Lyft</option><option value="rental">Rental car</option>
@@ -708,18 +717,30 @@
 
     function drawStay(t) {
       const L = f.lodging, group = p.group;
-      const kinds = [...(L.camp != null ? ['camp'] : []), 'hotel', 'airbnb'];
+      const kinds = [...(L.camp != null ? ['camp'] : []), 'hotel', 'airbnb', 'own'];
       const opts = kinds.map((k) => {
         const s = trip(f, { ...p, lodging: k });
         const sub = k === 'camp' ? (L.camp ? `${money(L.camp)}/night` : 'included with ticket')
+          : k === 'own' ? (s.stay.set ? `${money(s.stay.total)} total${group > 1 ? ' for the group' : ''}` : 'enter what you’re paying')
           : `${money(s.stay.rate)}/night${s.stay.live ? ' · live' : ''} · ${plural(s.stay.units, s.stay.unitLabel)}`;
-        return { v: k, label: s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
+        return { v: k, label: k === 'own' ? '✎ Your own price' : s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
       });
+      const own = p.ownStay || { label: '', amount: '', basis: 'total' };
       const rooms = Math.ceil(group / 2);
       const q = L.query, dates = `${fmtDate(t.depart)} to ${fmtDate(t.ret)}`;
       $('#stayBox').innerHTML = `
         <p class="muted small" style="margin:0 0 12px">Per person for ${plural(t.nights, 'night')}${group > 1 ? `, split ${group} ways` : ''}. Most people stay in <b style="color:var(--text)">${esc(L.area)}</b>. Rates are festival-week prices.</p>
         ${optionTiles('lodging', opts)}
+        ${t.stay.kind === 'own' ? `<div class="own-stay">
+          <div class="form-grid">
+            <label class="field">Where you're staying<input id="ownLabel" maxlength="40" placeholder="e.g. Our Airbnb, Friend's place" value="${esc(own.label || '')}" /></label>
+            <label class="field">Price (USD)<input id="ownAmount" type="number" min="0" step="1" placeholder="0" value="${own.amount || ''}" /></label>
+            <label class="field">That price is<select id="ownBasis"><option value="total" ${own.basis !== 'night' ? 'selected' : ''}>Total for the stay</option><option value="night" ${own.basis === 'night' ? 'selected' : ''}>Per night</option></select></label>
+          </div>
+          <p class="muted small" style="margin:8px 0 0">${t.stay.set
+            ? `${money(t.stay.total)} for ${plural(t.nights, 'night')} (${money(t.stay.rate)}/night)${group > 1 ? `, ${money(t.lodging)} each split ${group} ways` : ''}. Enter the whole place's price, not your share; the crew split divides it.`
+            : 'Enter the whole place’s price, not your share. Put 0 if it’s free, like staying with friends.'}</p>
+        </div>` : ''}
         <div id="liveStay" style="margin-top:14px"></div>
         <p class="muted small" style="margin:14px 0 8px">Search ${esc(q)} for ${dates}:</p>
         <div class="btn-row">
@@ -729,13 +750,19 @@
           <a class="btn sm" target="_blank" rel="noopener" href="https://www.vrbo.com/search?${new URLSearchParams({ destination: q, startDate: t.depart, endDate: t.ret, adults: group })}">Vrbo ↗</a>
         </div>`;
       bindTiles($('#stayBox'));
+      if (t.stay.kind === 'own') {
+        const setOwn = (key, val) => { p.ownStay = { ...(p.ownStay || { label: '', amount: 0, basis: 'total' }), [key]: val }; commit(); };
+        $('#ownLabel').addEventListener('change', (e) => setOwn('label', e.target.value.trim()));
+        $('#ownAmount').addEventListener('change', (e) => setOwn('amount', Math.max(0, Math.round(Number(e.target.value) || 0))));
+        $('#ownBasis').addEventListener('change', (e) => setOwn('basis', e.target.value));
+      }
       loadLiveStay(t);
     }
 
     async function loadLiveStay(t) {
       const box = $('#liveStay');
       const kind = t.stay.kind;
-      if (kind === 'camp') { box.innerHTML = ''; return; }
+      if (kind === 'camp' || kind === 'own') { box.innerHTML = ''; return; }
       const rentals = kind === 'airbnb';
       const adults = rentals ? p.group : 2;
       const key = [kind, t.depart, t.ret, p.group].join('|');
@@ -924,7 +951,7 @@
         ${t.travel.mode === 'drive'
           ? `<div class="row"><span>Gas to drive there & back · ${Math.round(t.travel.miles * 2).toLocaleString()} mi${t.travel.cars > 1 ? ` · ${t.travel.cars} cars` : ''} <span class="muted small">(est.)</span></span><span>${money(t.travel.price)}</span></div>`
           : `<div class="row"><span>Round-trip flight ${t.flight.local ? '' : `${t.from} ⇄ ${f.airport}`} ${t.flight.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.flight.local ? 'local' : money(t.flight.price)}</span></div>`}
-        <div class="row"><span>${t.stay.label} · ${plural(t.nights, 'night')}${t.stay.kind !== 'camp' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
+        <div class="row"><span>${esc(t.stay.label)} · ${plural(t.nights, 'night')}${t.stay.kind === 'hotel' || t.stay.kind === 'airbnb' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : t.stay.own ? '<span class="badge info">your price</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
         <div class="row"><span>${esc(t.ground.label)} <span class="muted small">(est.)</span></span><span>${money(t.transport)}</span></div>
         <div class="row"><span>Food & drink · ${t.days + 1} days</span><span>${money(t.food)}</span></div>
         <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span class="grad-text">${money(t.total)}</span></div>

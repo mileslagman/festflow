@@ -416,3 +416,5 @@ td .price { font-family: var(--digital); font-weight: 800; font-size: 16px; }
 .settle .pay:last-of-type { border-bottom: 0; }
 .settle .arrow { color: var(--gold); text-shadow: 0 0 10px var(--gold); }
 .settle .amt { margin-left: auto; font: 800 18px var(--digital); background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+.own-stay { margin-top: 14px; padding: 14px; border-radius: 14px; border: 1px dashed rgba(255, 79, 216, .45); background: rgba(255, 79, 216, .05); }

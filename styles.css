@@ -268,6 +268,15 @@ td .badge { white-space: nowrap; }
 .opt b { font-size: 20px; font-weight: 650; }
 .opt:hover { background: var(--raised); }
 .opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.stay-dates { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
+.stay-dates .field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+.stepper { display: flex; align-items: center; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; height: 43px; }
+.stepper button { width: 42px; height: 100%; border: 0; border-radius: 7px; background: none; color: var(--text); font: 20px/1 var(--font); cursor: pointer; }
+.stepper button:hover:not(:disabled) { background: var(--raised); }
+.stepper button:disabled { color: var(--muted); opacity: .5; cursor: default; }
+.stepper output { flex: 1; text-align: center; color: var(--text); font-size: 16px; font-weight: 600; }
+.check { display: flex; gap: 9px; align-items: flex-start; margin-top: 12px; font-size: 14px; color: var(--muted); cursor: pointer; }
+.check input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
 .own-stay { margin-top: 14px; padding: 16px; border-radius: 10px; background: var(--raised); }
 
 /* ---------- crew & cost split ---------- */

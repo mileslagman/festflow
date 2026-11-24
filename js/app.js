@@ -66,7 +66,7 @@
   const isEU = (f) => FL.airport(f.airport).region === 'EU';
   const defaultPlan = (f) => ({
     weekend: 0, tier: 0, lodging: f.lodging.camp != null ? 'camp' : 'hotel', ground: defaultGround(f), group: 1, food: 60, from: home(),
-    travel: 'fly', mpg: 28, gasPrice: isEU(f) ? 7.5 : 3.4,
+    travel: 'fly', stayBefore: 1, stayAfter: 1, matchTravel: true, mpg: 28, gasPrice: isEU(f) ? 7.5 : 3.4,
   });
 
   // ---------- driving ----------
@@ -97,8 +97,9 @@
   }
 
   // ---------- stay + ground transport models ----------
+  const STAY_PAD = 14; // how many days before or after the festival a stay can stretch
   // Hotel rooms hold 2, Airbnb homes hold `sleeps`; costs are split across the group.
-  function stayCost(f, p, nights, depart, ret) {
+  function stayCost(f, p, nights, checkin, checkout) {
     const group = p.group || 1;
     const L = f.lodging;
     if (p.lodging === 'camp' && L.camp != null) {
@@ -115,7 +116,7 @@
     }
     const kind = p.lodging === 'airbnb' ? 'airbnb' : 'hotel';
     const ls = p.liveStay;
-    const live = ls && ls.kind === kind && ls.depart === depart && ls.ret === ret && ls.group === group && ls.nightly != null;
+    const live = ls && ls.kind === kind && ls.checkin === checkin && ls.checkout === checkout && ls.group === group && ls.nightly != null;
     // A live Airbnb search is sized for the whole group, so it's one home.
     const units = kind === 'hotel' ? Math.ceil(group / 2) : live ? 1 : Math.ceil(group / L.sleeps);
     const rate = live ? ls.nightly : kind === 'hotel' ? L.hotel : L.airbnb;
@@ -171,9 +172,13 @@
   function trip(f, p = S.plans[f.id] || defaultPlan(f)) {
     p = { ...defaultPlan(f), ...p };
     const [start, end] = f.weekends[p.weekend] || f.weekends[0];
-    const depart = addDays(start, -1), ret = addDays(end, 1);
-    const days = daysBetween(start, end) + 1;
-    const nights = days + 1;
+    // The stay is stored relative to the festival, so switching weekends keeps its length.
+    const checkin = addDays(start, -p.stayBefore), checkout = addDays(end, p.stayAfter);
+    const nights = daysBetween(checkin, checkout);
+    const depart = p.matchTravel ? checkin : addDays(start, -1), ret = p.matchTravel ? checkout : addDays(end, 1);
+    const tripNights = daysBetween(depart, ret);
+    // Festival days you're actually in town for.
+    const days = daysBetween(depart > start ? depart : start, ret < end ? ret : end) + 1;
     const ticket = (f.tickets[p.tier] || f.tickets[0]).price;
     const from = p.from || home();
     let flight = FL.estimate(from, f.airport, depart);
@@ -191,15 +196,15 @@
     } else {
       travel = { mode: 'fly', price: flight.local ? 0 : flight.price };
     }
-    const stay = stayCost(f, p, nights, depart, ret);
+    const stay = stayCost(f, p, nights, checkin, checkout);
     const camping = stay.kind === 'camp';
-    const ground = groundCost(f, p, days, nights, camping, travel.mode === 'drive');
+    const ground = groundCost(f, p, days, tripNights, camping, travel.mode === 'drive');
     // Everything below is per person, so it lines up with the personal budget.
     const lodging = stay.total / group;
     const transport = ground.total / group;
-    const food = p.food * (days + 1);
+    const food = p.food * tripNights;
     const total = ticket + travel.price + lodging + transport + food;
-    return { start, end, depart, ret, days, nights, ticket, flight, travel, drive, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
+    return { start, end, depart, ret, checkin, checkout, days, nights, tripNights, ticket, flight, travel, drive, from, camping, stay, ground, group, lodging, transport, food, total, plan: p };
   }
 
   // ---------- crew + cost split ----------
@@ -726,10 +731,24 @@
         return { v: k, label: k === 'own' ? 'Your own price' : s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
       });
       const own = p.ownStay || { label: '', amount: '', basis: 'total' };
+      const dayAfterIn = addDays(t.checkin, 1);
+      const minOut = dayAfterIn > t.start ? dayAfterIn : t.start; // at least one night, and not before the festival
       const rooms = Math.ceil(group / 2);
-      const q = L.query, dates = `${fmtDate(t.depart)} to ${fmtDate(t.ret)}`;
+      const q = L.query, dates = `${fmtDate(t.checkin)} to ${fmtDate(t.checkout)}`;
       $('#stayBox').innerHTML = `
         <p class="muted small" style="margin:0 0 12px">Per person for ${plural(t.nights, 'night')}${group > 1 ? `, split ${group} ways` : ''}. Most people stay in <b style="color:var(--text)">${esc(L.area)}</b>. Rates are festival-week prices.</p>
+        <div class="stay-dates">
+          <label class="field">Check in<input id="stayIn" type="date" value="${t.checkin}" min="${addDays(t.start, -STAY_PAD)}" max="${t.end}" required /></label>
+          <label class="field">Check out<input id="stayOut" type="date" value="${t.checkout}" min="${minOut}" max="${addDays(t.end, STAY_PAD)}" required /></label>
+          <div class="field"><span id="nightsLabel">Nights</span><div class="stepper" role="group" aria-labelledby="nightsLabel">
+            <button type="button" data-night="-1" aria-label="One night less" ${addDays(t.checkout, -1) < minOut ? 'disabled' : ''}>−</button>
+            <output>${t.nights}</output>
+            <button type="button" data-night="1" aria-label="One night more" ${t.checkout >= addDays(t.end, STAY_PAD) ? 'disabled' : ''}>+</button></div></div>
+        </div>
+        <label class="check"><input type="checkbox" id="matchTravel" ${p.matchTravel ? 'checked' : ''} /> Match my travel dates, so flights or driving, rental and food follow the stay</label>
+        ${p.matchTravel ? '' : `<p class="muted small" style="margin:4px 0 0">You travel ${fmtDay(t.depart)} to ${fmtDay(t.ret)}.${t.checkin > t.depart || t.checkout < t.ret ? ' Your stay doesn’t cover every night of that trip.' : t.checkin < t.depart || t.checkout > t.ret ? ' Your stay is longer than that trip.' : ''}</p>`}
+        ${p.stayBefore !== 1 || p.stayAfter !== 1 || !p.matchTravel ? '<button type="button" class="btn sm ghost" id="stayReset" style="margin-top:10px">Reset dates</button>' : ''}
+        <div style="height:16px"></div>
         ${optionTiles('lodging', opts)}
         ${t.stay.kind === 'own' ? `<div class="own-stay">
           <div class="form-grid">
@@ -745,11 +764,30 @@
         <p class="muted small" style="margin:14px 0 8px">Search ${esc(q)} for ${dates}:</p>
         <div class="btn-row">
           <a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/travel/search?q=${encodeURIComponent(`hotels in ${q} ${dates}`)}">Google Hotels ↗</a>
-          <a class="btn sm" target="_blank" rel="noopener" href="https://www.booking.com/searchresults.html?${new URLSearchParams({ ss: q, checkin: t.depart, checkout: t.ret, group_adults: group, no_rooms: rooms })}">Booking.com ↗</a>
-          <a class="btn sm" target="_blank" rel="noopener" href="https://www.airbnb.com/s/${encodeURIComponent(q)}/homes?${new URLSearchParams({ checkin: t.depart, checkout: t.ret, adults: group })}">Airbnb ↗</a>
-          <a class="btn sm" target="_blank" rel="noopener" href="https://www.vrbo.com/search?${new URLSearchParams({ destination: q, startDate: t.depart, endDate: t.ret, adults: group })}">Vrbo ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.booking.com/searchresults.html?${new URLSearchParams({ ss: q, checkin: t.checkin, checkout: t.checkout, group_adults: group, no_rooms: rooms })}">Booking.com ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.airbnb.com/s/${encodeURIComponent(q)}/homes?${new URLSearchParams({ checkin: t.checkin, checkout: t.checkout, adults: group })}">Airbnb ↗</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://www.vrbo.com/search?${new URLSearchParams({ destination: q, startDate: t.checkin, endDate: t.checkout, adults: group })}">Vrbo ↗</a>
         </div>`;
       bindTiles($('#stayBox'));
+      const setStay = (checkin, checkout) => {
+        const lo = addDays(t.start, -STAY_PAD), hi = addDays(t.end, STAY_PAD);
+        checkin = checkin < lo ? lo : checkin > t.end ? t.end : checkin;
+        const next = addDays(checkin, 1), least = next > t.start ? next : t.start;
+        checkout = checkout < least ? least : checkout > hi ? hi : checkout;
+        p.stayBefore = daysBetween(checkin, t.start);
+        p.stayAfter = daysBetween(t.end, checkout);
+        commit();
+      };
+      $('#stayIn').addEventListener('change', (e) => { if (e.target.value) setStay(e.target.value, t.checkout); else e.target.value = t.checkin; });
+      $('#stayOut').addEventListener('change', (e) => { if (e.target.value) setStay(t.checkin, e.target.value); else e.target.value = t.checkout; });
+      $$('[data-night]', $('#stayBox')).forEach((b) => b.addEventListener('click', () => {
+        setStay(t.checkin, addDays(t.checkout, Number(b.dataset.night)));
+        const again = $(`[data-night="${b.dataset.night}"]`, $('#stayBox'));
+        if (again && !again.disabled) again.focus(); // keep keyboard focus after the redraw
+      }));
+      $('#matchTravel').addEventListener('change', (e) => { p.matchTravel = e.target.checked; commit(); $('#matchTravel').focus(); });
+      const reset = $('#stayReset');
+      if (reset) reset.addEventListener('click', () => { p.stayBefore = 1; p.stayAfter = 1; p.matchTravel = true; commit(); });
       if (t.stay.kind === 'own') {
         const setOwn = (key, val) => { p.ownStay = { ...(p.ownStay || { label: '', amount: 0, basis: 'total' }), [key]: val }; commit(); };
         $('#ownLabel').addEventListener('change', (e) => setOwn('label', e.target.value.trim()));
@@ -765,16 +803,16 @@
       if (kind === 'camp' || kind === 'own') { box.innerHTML = ''; return; }
       const rentals = kind === 'airbnb';
       const adults = rentals ? p.group : 2;
-      const key = [kind, t.depart, t.ret, p.group].join('|');
-      const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).depart, trip(f, p).ret, p.group].join('|') !== key;
+      const key = [kind, t.checkin, t.checkout, p.group].join('|');
+      const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).checkin, trip(f, p).checkout, p.group].join('|') !== key;
       if (!(await FL.liveStatus())) return;
       box.innerHTML = `<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Checking Google ${rentals ? 'vacation rentals' : 'Hotels'}…</span></div>`;
       try {
-        const r = await FL.liveStays(f.lodging.query, t.depart, t.ret, adults, rentals);
+        const r = await FL.liveStays(f.lodging.query, t.checkin, t.checkout, adults, rentals);
         if (stale()) return;
         box.innerHTML = liveStayCard(r, rentals, t.nights);
         if (r.typical != null) {
-          p.liveStay = { kind, nightly: r.typical, depart: t.depart, ret: t.ret, group: p.group, at: r.fetchedAt };
+          p.liveStay = { kind, nightly: r.typical, checkin: t.checkin, checkout: t.checkout, group: p.group, at: r.fetchedAt };
           if (planned()) { S.plans[id] = { ...p }; save(); }
           drawBreakdown();
           // Refresh the tiles so the selected option shows the live rate.
@@ -953,7 +991,7 @@
           : `<div class="row"><span>Round-trip flight ${t.flight.local ? '' : `${t.from} ⇄ ${f.airport}`} ${t.flight.live ? '<span class="badge good">live</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.flight.local ? 'local' : money(t.flight.price)}</span></div>`}
         <div class="row"><span>${esc(t.stay.label)} · ${plural(t.nights, 'night')}${t.stay.kind === 'hotel' || t.stay.kind === 'airbnb' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : t.stay.own ? '<span class="badge info">your price</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
         <div class="row"><span>${esc(t.ground.label)} <span class="muted small">(est.)</span></span><span>${money(t.transport)}</span></div>
-        <div class="row"><span>Food & drink · ${t.days + 1} days</span><span>${money(t.food)}</span></div>
+        <div class="row"><span>Food & drink · ${plural(t.tripNights, 'day')}</span><span>${money(t.food)}</span></div>
         <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span>${money(t.total)}</span></div>
         ${t.group > 1 ? `<div class="muted small">Whole group of ${t.group}: ${money(t.total * t.group)}. Stay and transport are split evenly.</div>` : ''}
         ${S.profile && S.profile.budget ? `<div class="muted small" style="margin-top:6px">That's ${Math.round(t.total / S.profile.budget * 100)}% of your ${money(S.profile.budget)} budget.</div>` : ''}`;

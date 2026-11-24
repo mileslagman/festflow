@@ -51,7 +51,12 @@
     } catch (e) { /* storage unavailable */ }
     return { profile: null, plans: {}, events: [], custom: [] };
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ }
+    // Redraw the sidebar once the current change has finished.
+    clearTimeout(save.timer);
+    save.timer = setTimeout(drawSide, 0);
+  }
 
   // Festivals the user added through lookup join the built-in catalog.
   S.custom.forEach((f) => { if (!fest(f.id) && FL.airport(f.airport)) F.festivals.push(f); });
@@ -1362,6 +1367,64 @@
     return out;
   }
 
+  // ---------- sidebar: upcoming trips, mini calendar, budget ----------
+  const side = { month: null };
+
+  function drawSide() {
+    const box = $('#side');
+    if (!S.profile) { box.innerHTML = ''; return; }
+    const t0 = todayISO();
+    const trips = Object.keys(S.plans).map(fest).filter(Boolean).map((f) => ({ f, t: trip(f) }))
+      .sort((a, b) => a.t.start.localeCompare(b.t.start));
+    const upcoming = trips.filter((x) => x.t.end >= t0);
+    const when = (t) => {
+      const n = daysBetween(t0, t.start);
+      return n > 0 ? plural(n, 'day') : 'on now';
+    };
+    const rows = upcoming.length
+      ? upcoming.slice(0, 3).map(({ f, t }) => `<a class="side-trip" style="--c:${f.color}" href="#/festival/${f.id}">
+          <span class="dot"></span><span class="side-name">${esc(f.name)}<small>${fmtRange(t.start, t.end, false)}, ${when(t)}</small></span></a>`).join('')
+      : recommend(3).map((f) => `<a class="side-trip" style="--c:${f.color}" href="#/festival/${f.id}">
+          <span class="dot"></span><span class="side-name">${esc(f.name)}<small>${fmtWeekends(f)}</small></span></a>`).join('');
+
+    if (!side.month) { const n = new Date(); side.month = new Date(n.getFullYear(), n.getMonth(), 1); }
+    const m = side.month;
+    const pad0 = m.getDay(), count = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+    const days = [];
+    for (let i = 0; i < pad0; i++) days.push('<span></span>');
+    for (let n = 1; n <= count; n++) {
+      const d = iso(new Date(m.getFullYear(), m.getMonth(), n));
+      const on = upcoming.concat(trips).find((x) => d >= x.t.start && d <= x.t.end);
+      const ev = S.events.filter((e) => e.date === d);
+      const about = [on && on.f.name, ev.length && plural(ev.length, 'event')].filter(Boolean).join(', ');
+      days.push(`<button type="button" data-day="${d}" class="${on ? 'fest' : ''} ${ev.length ? 'has' : ''} ${d === t0 ? 'today' : ''}" ${on ? `style="--c:${on.f.color}"` : ''}
+        aria-label="${fmtDate(d)}${about ? ': ' + esc(about) : ''}" ${about ? `title="${esc(about)}"` : ''}>${n}</button>`);
+    }
+
+    const total = trips.reduce((x, y) => x + y.t.total, 0), budget = S.profile.budget, left = budget - total;
+    box.innerHTML = `
+      <section><h2>${upcoming.length ? 'Your trips' : 'You might like'}</h2>${rows}
+        ${upcoming.length > 3 ? `<a class="side-more" href="#/">${upcoming.length - 3} more</a>` : ''}</section>
+      <section><div class="mini-head"><h2>${m.toLocaleString('en-US', { month: 'short', year: 'numeric' })}</h2>
+          <button type="button" data-shift="-1" aria-label="Previous month">‹</button><button type="button" data-shift="1" aria-label="Next month">›</button></div>
+        <div class="mini">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => `<i>${d}</i>`).join('')}${days.join('')}</div></section>
+      ${budget ? `<section class="side-budget"><h2>Budget</h2>
+        <div class="meter ${left < 0 ? 'over' : ''}"><i style="width:${Math.min(100, (total / budget) * 100)}%"></i></div>
+        <p>${left >= 0 ? `${money(left)} left of` : `${money(-left)} over`} ${money(budget)}</p></section>` : ''}`;
+
+    $$('[data-shift]', box).forEach((b) => b.addEventListener('click', () => {
+      const dir = b.dataset.shift;
+      side.month = new Date(m.getFullYear(), m.getMonth() + Number(dir), 1);
+      drawSide();
+      $(`[data-shift="${dir}"]`, box).focus(); // keep keyboard focus after the redraw
+    }));
+    $$('[data-day]', box).forEach((b) => b.addEventListener('click', () => {
+      cal.sel = b.dataset.day;
+      cal.month = new Date(m.getFullYear(), m.getMonth(), 1);
+      if (location.hash === '#/calendar') viewCalendar(); else location.hash = '#/calendar';
+    }));
+  }
+
   function viewCalendar() {
     if (!cal.month) { const n = new Date(); cal.month = new Date(n.getFullYear(), n.getMonth(), 1); }
     if (!cal.sel) cal.sel = todayISO();
@@ -1516,6 +1579,7 @@
     const navKey = name === '' ? 'dashboard' : name === 'festival' || name === 'add' ? 'festivals' : name;
     $$('.nav a[data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === navKey));
     fn(arg && decodeURIComponent(arg));
+    drawSide();
     if (window.FX) FX.tickCountdowns();
   }
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });

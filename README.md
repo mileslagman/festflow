@@ -4,7 +4,7 @@ An all-in-one music festival planner with a personalized dashboard, festival dat
 
 ## Use it online
 
-https://mileslagman.github.io/festflow/
+https://mileslagman.com/festflow/ (https://mileslagman.github.io/festflow/ redirects there)
 
 The website is this repo served by GitHub Pages, and it updates when `main` is pushed. Pages can only serve files, so live fares, live hotel rates and Google festival lookup aren't available there; it uses the built-in estimates and links instead. Map lookups and driving routes still work, because the browser asks OpenStreetMap directly. Plans are saved in your own browser and aren't shared between the website and `localhost`.
 

@@ -100,8 +100,8 @@
 
   // Live fares come from server.js (/api/fares), which holds the SerpApi key.
   // When the app is served without it (or with no key), liveStatus() resolves false.
-  // GitHub Pages only serves files, so there's no server to ask.
-  const hosted = location.hostname.endsWith('.github.io');
+  // server.js only listens on this computer, so anywhere else (GitHub Pages) there's no server to ask.
+  const hosted = !['localhost', '127.0.0.1'].includes(location.hostname);
   let status = null;
   function liveStatus() {
     if (hosted) return Promise.resolve(false);

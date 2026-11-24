@@ -198,7 +198,7 @@
   }
 
   // ---------- crew + cost split ----------
-  const CREW_COLORS = ['#ff4fd8', '#27e6ff', '#ffd27a', '#b8ff5c', '#9b6bff', '#ff8a3d'];
+  const CREW_COLORS = ['#e3a5b8', '#8fc3d9', '#e6c288', '#a9cf95', '#b3a5e0', '#e0a98a'];
   const money2 = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Keeps the crew list in step with the group size. The first member is you.
@@ -288,7 +288,7 @@
   }
 
   // ---------- event + clash helpers ----------
-  const TYPE_COLORS = { set: '#ff5fa2', flight: '#5cb8ff', drive: '#b8ff5c', reminder: '#ffb547', custom: '#7c5cff' };
+  const TYPE_COLORS = { set: '#e08cab', flight: '#82b4e0', drive: '#a3cf85', reminder: '#e3b56c', custom: '#a596e6' };
   const evColor = (e) => (e.type === 'set' && fest(e.festId) ? fest(e.festId).color : TYPE_COLORS[e.type] || TYPE_COLORS.custom);
   const byTime = (a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || ''));
   // Festival-day minutes: anything before 8am belongs to the previous night.
@@ -381,25 +381,21 @@
     const x = (d) => pl + (maxD - d) / maxD * (W - pl - pr);
     const y = (v) => pt + (hi - v) / (hi - lo) * (H - pt - pb);
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.days).toFixed(1)},${y(p.price).toFixed(1)}`).join('');
-    const area = `${line}L${x(0)},${H - pb}L${x(maxD)},${H - pb}Z`;
     const [s1, s2] = FL.sweetSpot(est.intl);
     const yt = [lo, (lo + hi) / 2, hi].map((v) => `<text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${money(v)}</text><line class="axis" x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke-dasharray="2 4"/>`).join('');
     const xt = [300, 240, 180, 120, 60, 0].map((d) => `<text x="${x(d)}" y="${H - 8}" text-anchor="middle">${d ? d + 'd' : 'Fly'}</text>`).join('');
     let now = '';
     if (est.daysOut >= 0 && est.daysOut <= maxD) {
       const cx = x(est.daysOut), cy = y(est.price);
-      now = `<line x1="${cx}" x2="${cx}" y1="${pt}" y2="${H - pb}" stroke="#fff" stroke-opacity=".35" stroke-dasharray="3 3"/>
-        <circle cx="${cx}" cy="${cy}" r="5" fill="#fff" stroke="#ff4fd8" stroke-width="3" style="filter:drop-shadow(0 0 6px #ff4fd8)"/>
-        <text x="${cx}" y="${pt - 3}" text-anchor="middle" style="fill:#fff;font-weight:600">Today</text>`;
+      now = `<line class="today" x1="${cx}" x2="${cx}" y1="${pt}" y2="${H - pb}"/>
+        <circle class="today-dot" cx="${cx}" cy="${cy}" r="5.5"/>
+        <text class="today-label" x="${cx}" y="${pt - 3}" text-anchor="middle">Today</text>`;
     }
     return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Estimated fare by days before departure">
-      <defs><linearGradient id="fareFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ff4fd8" stop-opacity=".35"/><stop offset="1" stop-color="#9b6bff" stop-opacity="0"/></linearGradient>
-        <linearGradient id="fareLine" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#ffd27a"/><stop offset=".5" stop-color="#ff4fd8"/><stop offset="1" stop-color="#27e6ff"/></linearGradient></defs>
-      <rect x="${x(s2)}" y="${pt}" width="${x(s1) - x(s2)}" height="${H - pt - pb}" fill="#4dffb0" fill-opacity=".08"/>
-      <text x="${(x(s1) + x(s2)) / 2}" y="${H - pb - 6}" text-anchor="middle" style="fill:#4dffb0">sweet spot</text>
+      <rect class="band" x="${x(s2)}" y="${pt}" width="${x(s1) - x(s2)}" height="${H - pt - pb}"/>
+      <text class="band-label" x="${(x(s1) + x(s2)) / 2}" y="${pt + 16}" text-anchor="middle">best time</text>
       ${yt}${xt}
-      <path d="${area}" fill="url(#fareFill)"/>
-      <path class="fare-line" d="${line}" fill="none" stroke="url(#fareLine)" stroke-width="2.5" stroke-linejoin="round"/>
+      <path class="fare-line" d="${line}"/>
       ${now}
     </svg></div>`;
   }
@@ -410,13 +406,13 @@
     return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)}h ago`;
   }
   function liveCard(r) {
-    if (r.lowest == null) return '<div class="live-card"><span class="badge muted">● LIVE</span> <span class="muted small">Google Flights has no itineraries for these dates yet — airlines usually open schedules ~11 months out.</span></div>';
+    if (r.lowest == null) return '<div class="live-card"><span class="badge muted">Live</span> <span class="muted small">Google Flights has no itineraries for these dates yet — airlines usually open schedules ~11 months out.</span></div>';
     const tone = { low: 'good', typical: 'info', high: 'bad' }[r.priceLevel] || 'muted';
     return `<div class="live-card">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-        <span><span class="badge good">● LIVE</span> <span class="muted small">Google Flights · checked ${ago(r.fetchedAt)}</span></span>
+        <span><span class="badge good">Live</span> <span class="muted small">Google Flights · checked ${ago(r.fetchedAt)}</span></span>
         ${r.priceLevel ? `<span class="badge ${tone}">Prices are ${esc(r.priceLevel)}</span>` : ''}</div>
-      <div class="big" style="font-size:34px;margin-top:6px">${money(r.lowest)} <span class="muted small" style="font-family:Inter;font-weight:400">lowest round trip</span></div>
+      <div class="big" style="font-size:34px;margin-top:6px">${money(r.lowest)} <span class="muted small" style="font-weight:400">lowest round trip</span></div>
       ${r.typicalRange ? `<div class="muted small">Google's typical range for this route: ${money(r.typicalRange[0])}–${money(r.typicalRange[1])}</div>` : ''}
       ${r.options.length ? `<div style="margin-top:8px">${r.options.map((o) => `<div class="item" style="padding:7px 0">
         <div class="grow"><div class="title small">${esc(o.airlines || 'Multiple airlines')}</div>
@@ -427,11 +423,11 @@
 
   function liveStayCard(r, rentals, nights) {
     const what = rentals ? 'vacation rentals' : 'hotels';
-    if (r.typical == null) return `<div class="live-card"><span class="badge muted">● LIVE</span> <span class="muted small">Google has no ${what} with prices for these dates yet. Showing the festival-week estimate.</span></div>`;
+    if (r.typical == null) return `<div class="live-card"><span class="badge muted">Live</span> <span class="muted small">Google has no ${what} with prices for these dates yet. Showing the festival-week estimate.</span></div>`;
     return `<div class="live-card">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-        <span><span class="badge good">● LIVE</span> <span class="muted small">Google ${rentals ? 'vacation rentals' : 'Hotels'} · ${r.count} with prices · checked ${ago(r.fetchedAt)}</span></span></div>
-      <div class="big" style="font-size:30px;margin-top:6px">${money(r.typical)} <span class="muted small" style="font-family:Inter;font-weight:400">typical / night ${rentals ? `for ${plural(r.adults, 'guest')}` : 'per room'}</span></div>
+        <span><span class="badge good">Live</span> <span class="muted small">Google ${rentals ? 'vacation rentals' : 'Hotels'} · ${r.count} with prices · checked ${ago(r.fetchedAt)}</span></span></div>
+      <div class="big" style="font-size:30px;margin-top:6px">${money(r.typical)} <span class="muted small" style="font-weight:400">typical / night ${rentals ? `for ${plural(r.adults, 'guest')}` : 'per room'}</span></div>
       <div class="muted small">Cheapest ${money(r.lowest)}/night. "Typical" is the middle of the 15 cheapest, used in your total.</div>
       ${r.options.length ? `<div style="margin-top:8px">${r.options.map((o) => `<div class="item" style="padding:7px 0">
         <div class="grow"><div class="title small">${o.link ? `<a href="${esc(o.link)}" target="_blank" rel="noopener">${esc(o.name)} ↗</a>` : esc(o.name)}</div>
@@ -497,8 +493,7 @@
   // ---------- views ----------
   function viewOnboard() {
     view.innerHTML = `<div class="onboard">
-      <div class="ornament">✦</div>
-      <h1>Every festival, <span class="grad-text">one plan.</span></h1>
+      <h1>Every festival, one plan.</h1>
       <p class="muted" style="font-size:17px">Dates, ticket prices, flight estimates from your home airport, set-time planning and a calendar — all in one place. Tell us a bit about you to personalize it.</p>
       <form class="card pad-lg" id="pf" style="margin-top:22px">${profileFields({})}
         <div class="btn-row" style="margin-top:20px"><button class="btn primary" type="submit">Build my dashboard →</button></div>
@@ -519,7 +514,7 @@
     const agenda = upcomingAgenda(7);
 
     view.innerHTML = `
-      <div class="page-head"><div><h1>Hey ${esc(p.name)} <span class="grad-text">✦</span></h1>
+      <div class="page-head"><div><h1>Hey ${esc(p.name)}</h1>
         <p class="muted">${trips.length ? `${plural(trips.length, 'festival')} planned · flying from ${p.home}` : 'No trips yet — pick a festival to start planning.'}</p></div>
         <a class="btn primary" href="#/festivals">+ Plan a festival</a></div>
 
@@ -600,10 +595,10 @@
       }[sort];
       list = list.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
       const raw = $('#q').value.trim();
-      const lookupCard = raw ? `<a class="card fcard lookup-card" href="#/add/${encodeURIComponent(raw)}"><span class="bar" style="--c:#ffd27a"></span>
+      const lookupCard = raw ? `<a class="card fcard lookup-card" href="#/add/${encodeURIComponent(raw)}"><span class="bar"></span>
           <h3>${list.length ? 'Looking for something else?' : `Can't find “${esc(raw)}”?`}</h3>
           <p class="muted small" style="margin:0">Look up “${esc(raw)}” on Google and add it with its dates, tickets, flights, stays and calendar.</p>
-          <span class="btn primary sm" style="align-self:flex-start;margin-top:auto">✦ Look it up</span></a>` : '';
+          <span class="btn primary sm" style="align-self:flex-start;margin-top:auto">Look it up</span></a>` : '';
       $('#fgrid').innerHTML = list.length || raw ? list.map(festCard).join('') + lookupCard : '<div class="empty">No festivals match those filters.</div>';
       $('#fgrid').dataset.count = list.length;
     };
@@ -627,9 +622,9 @@
       <div class="hero" style="--c:${f.color}">
         <a href="#/festivals" class="muted small" style="text-decoration:none">← All festivals</a>
         <h1 style="margin-top:8px">${esc(f.name)}</h1>
-        <div class="meta"><span>📍 ${esc(f.city)}</span><span>✈ ${f.airport}</span><span>📅 ${fmtWeekends(f)}</span>
-          <span>🕛 Gates ~${fmtTime(f.hours[0])}–${fmtTime(f.hours[1])}</span></div>
-        <p style="max-width:640px;color:#d9d5ee">${esc(f.blurb)}</p>
+        <div class="meta"><span>${fmtWeekends(f)}</span><span>${esc(f.city)}</span><span>Airport ${f.airport}</span>
+          <span>Gates about ${fmtTime(f.hours[0])}–${fmtTime(f.hours[1])}</span></div>
+        <p class="blurb">${esc(f.blurb)}</p>
         <div class="tags">${f.genres.map((x) => `<span class="tag ${g.includes(x) ? 'match' : ''}">${x}</span>`).join('')}</div>
         <div class="btn-row" style="margin-top:18px"><button class="btn primary" id="savePlan"></button>
           ${f.url ? `<a class="btn ghost" href="${esc(f.url)}" target="_blank" rel="noopener">Official site & tickets ↗</a>` : ''}
@@ -688,7 +683,7 @@
 
     function draw() {
       const t = trip(f, p);
-      $('#savePlan').textContent = planned() ? '✓ Saved to my plan — remove' : '★ Save to my plan';
+      $('#savePlan').textContent = planned() ? 'Remove from my plan' : 'Save to my plan';
       $('#savePlan').classList.toggle('primary', !planned());
       $$('#wk button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === p.weekend));
       $('#tier').value = p.tier; $('#lodging').value = t.stay.kind; $('#ground').value = t.ground.mode;
@@ -723,7 +718,7 @@
         const sub = k === 'camp' ? (L.camp ? `${money(L.camp)}/night` : 'included with ticket')
           : k === 'own' ? (s.stay.set ? `${money(s.stay.total)} total${group > 1 ? ' for the group' : ''}` : 'enter what you’re paying')
           : `${money(s.stay.rate)}/night${s.stay.live ? ' · live' : ''} · ${plural(s.stay.units, s.stay.unitLabel)}`;
-        return { v: k, label: k === 'own' ? '✎ Your own price' : s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
+        return { v: k, label: k === 'own' ? 'Your own price' : s.stay.label, cost: s.lodging, sub, on: k === t.stay.kind };
       });
       const own = p.ownStay || { label: '', amount: '', basis: 'total' };
       const rooms = Math.ceil(group / 2);
@@ -768,7 +763,7 @@
       const key = [kind, t.depart, t.ret, p.group].join('|');
       const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).depart, trip(f, p).ret, p.group].join('|') !== key;
       if (!(await FL.liveStatus())) return;
-      box.innerHTML = `<div class="live-card"><span class="badge info">● LIVE</span> <span class="muted small">Checking Google ${rentals ? 'vacation rentals' : 'Hotels'}…</span></div>`;
+      box.innerHTML = `<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Checking Google ${rentals ? 'vacation rentals' : 'Hotels'}…</span></div>`;
       try {
         const r = await FL.liveStays(f.lodging.query, t.depart, t.ret, adults, rentals);
         if (stale()) return;
@@ -847,7 +842,7 @@
           ${c.members.length < 12 ? '<button class="btn sm" id="crewAdd">+ Add person</button>' : ''}
         </div>
 
-        <h3 style="margin:22px 0 10px">Shared costs <span class="muted small" style="font-family:Inter;font-weight:400">· pick who paid and who's in</span></h3>
+        <h3 style="margin:22px 0 10px">Shared costs <span class="muted small" style="font-weight:400">· pick who paid and who's in</span></h3>
         <div class="table-wrap"><table class="crew-table">
           <thead><tr><th>Cost</th><th>Amount</th><th>Paid by</th><th>Split between</th><th>Each</th><th></th></tr></thead>
           <tbody>
@@ -880,7 +875,7 @@
           <h3 style="margin:0 0 10px">Settle up</h3>
           ${c.transfers.length ? c.transfers.map((x) => `<div class="pay"><b>${esc(x.from)}</b><span class="arrow">→</span><b>${esc(x.to)}</b><span class="amt">${money2(x.amount)}</span></div>`).join('')
             : '<div class="muted">Everyone is square. Set "Paid by" on each cost once someone books it.</div>'}
-          <div class="btn-row" style="margin-top:14px"><button class="btn sm" id="crewCopy">⧉ Copy summary for the group chat</button></div>
+          <div class="btn-row" style="margin-top:14px"><button class="btn sm" id="crewCopy">Copy summary for the group chat</button></div>
         </div>`;
 
       // members
@@ -954,7 +949,7 @@
         <div class="row"><span>${esc(t.stay.label)} · ${plural(t.nights, 'night')}${t.stay.kind === 'hotel' || t.stay.kind === 'airbnb' ? ` · ${plural(t.stay.units, t.stay.unitLabel)}` : ''} ${t.stay.live ? '<span class="badge good">live</span>' : t.stay.own ? '<span class="badge info">your price</span>' : '<span class="muted small">(est.)</span>'}</span><span>${t.lodging ? money(t.lodging) : 'included'}</span></div>
         <div class="row"><span>${esc(t.ground.label)} <span class="muted small">(est.)</span></span><span>${money(t.transport)}</span></div>
         <div class="row"><span>Food & drink · ${t.days + 1} days</span><span>${money(t.food)}</span></div>
-        <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span class="grad-text">${money(t.total)}</span></div>
+        <div class="row total"><span>Estimated trip total${t.group > 1 ? ' <span class="muted small" style="font-weight:400">per person</span>' : ''}</span><span>${money(t.total)}</span></div>
         ${t.group > 1 ? `<div class="muted small">Whole group of ${t.group}: ${money(t.total * t.group)}. Stay and transport are split evenly.</div>` : ''}
         ${S.profile && S.profile.budget ? `<div class="muted small" style="margin-top:6px">That's ${Math.round(t.total / S.profile.budget * 100)}% of your ${money(S.profile.budget)} budget.</div>` : ''}`;
     }
@@ -1004,8 +999,8 @@
       const maps = `https://www.google.com/maps/dir/?${new URLSearchParams({ api: 1, origin: `${d.o.lat},${d.o.lon}`, destination: `${d.v.lat},${d.v.lon}`, travelmode: 'driving' })}`;
       $('#flightBox').innerHTML = `
         <div class="muted small" style="margin-bottom:10px">${esc(d.o.label || 'Home')} → ${esc(f.name)} · ${fmtDay(t.depart)} – ${fmtDay(t.ret)}</div>
-        <div class="live-card" style="border-color:rgba(184,255,92,.4);background:linear-gradient(135deg,rgba(184,255,92,.08),rgba(39,230,255,.05))">
-          <div class="big" style="font-size:32px">${money(d.total)} <span class="muted small" style="font-family:Inter;font-weight:400">gas, round trip${d.cars > 1 ? ` · ${d.cars} cars` : ''}</span></div>
+        <div class="live-card">
+          <div class="big" style="font-size:32px">${money(d.total)} <span class="muted small" style="font-weight:400">gas, round trip${d.cars > 1 ? ` · ${d.cars} cars` : ''}</span></div>
           <div class="muted small">${money(d.price)} per person${p.group > 1 ? ` (split ${p.group} ways)` : ''} · ${Math.round(d.miles * 2).toLocaleString()} mi round trip · ~${fmtHours(d.hours)} each way without stops</div>
         </div>
         <div class="form-grid" style="margin-top:14px">
@@ -1032,13 +1027,13 @@
 
     function drawFlights(t) {
       const e = FL.estimate(t.from, f.airport, t.depart);
-      if (e.local) { $('#flightBox').innerHTML = `<div class="empty">You're local to ${f.airport} — no flight needed. 🎉</div>`; return; }
+      if (e.local) { $('#flightBox').innerHTML = `<div class="empty">You're local to ${f.airport} — no flight needed.</div>`; return; }
       $('#flightBox').innerHTML = `
           <div class="muted small" style="margin-bottom:10px">${t.from} ⇄ ${f.airport} · ${e.mi.toLocaleString()} mi · ${fmtDay(t.depart)} – ${fmtDay(t.ret)}</div>
           <div id="liveBox"></div>
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-top:14px">
             <div><div class="muted small">FestFlow estimate</div>
-              <div class="big" style="font-size:26px">${money(e.price)} <span class="muted small" style="font-family:Inter;font-weight:400">round trip</span></div>
+              <div class="big" style="font-size:26px">${money(e.price)} <span class="muted small" style="font-weight:400">round trip</span></div>
               <div class="muted small">Typical range ${money(e.low)}–${money(e.high)}</div></div>
             <span class="badge ${e.tone}">${e.status}</span></div>
           <div class="muted small" style="margin:12px 0 6px">Best booking window: <b style="color:var(--text)">${fmtDate(e.bestFrom)} – ${fmtDate(e.bestTo)}</b> (≈ ${money(e.best)})</div>
@@ -1056,7 +1051,7 @@
         if (!stale()) box.innerHTML = '<div class="notice"><b>Live fares are off.</b> Add a free SerpApi key to <code>festflow/.env</code> and run <code>node server.js</code> to see real Google Flights prices here (see README).</div>';
         return;
       }
-      box.innerHTML = '<div class="live-card"><span class="badge info">● LIVE</span> <span class="muted small">Checking Google Flights…</span></div>';
+      box.innerHTML = '<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Checking Google Flights…</span></div>';
       try {
         const r = await FL.live(t.from, f.airport, t.depart, t.ret);
         if (stale()) return;
@@ -1096,7 +1091,7 @@
     $('#food').addEventListener('change', (e) => { p.food = Math.max(0, Number(e.target.value) || 0); commit(); });
     $('#from').addEventListener('change', (e) => { p.from = e.target.value; commit(); });
 
-    $('#savePlan').addEventListener('click', (ev) => {
+    $('#savePlan').addEventListener('click', () => {
       if (planned()) {
         const sets = S.events.filter((e) => e.festId === id && !e.auto).length;
         if (!confirm(`Remove ${f.name} from your plan?${sets ? ` Your ${plural(sets, 'saved set')} will be removed too.` : ''}`)) return;
@@ -1106,7 +1101,6 @@
       } else {
         S.plans[id] = { ...p };
         syncAutoEvents(f);
-        if (window.FX) FX.burst(ev.clientX, ev.clientY);
         toast(`${f.name} saved — flights & booking reminder added to your calendar`);
       }
       draw();
@@ -1165,7 +1159,7 @@
       <div class="card pad-lg">
         <form id="lookupForm" style="display:flex;gap:10px;flex-wrap:wrap">
           <input type="search" name="q" value="${esc(q)}" placeholder="Festival name, e.g. Imagine Music Festival" required style="flex:1 1 260px" />
-          <button class="btn primary" type="submit">✦ Look it up</button></form>
+          <button class="btn primary" type="submit">Look it up</button></form>
         <div id="lookupStatus" style="margin-top:12px"></div>
       </div>
       <form class="card pad-lg section" id="addForm" autocomplete="off">
@@ -1196,7 +1190,7 @@
         <div style="margin-top:16px"><div class="muted small" style="margin-bottom:8px">Genres</div>
           <div class="chips">${F.genres.map((x) => `<span class="chip ${g.includes(x) ? 'on' : ''}" data-genre="${x}">${x}</span>`).join('')}</div></div>
         <input type="hidden" name="blurb" />
-        <div class="btn-row" style="margin-top:22px"><button class="btn primary" type="submit">★ Add to FestFlow</button></div>
+        <div class="btn-row" style="margin-top:22px"><button class="btn primary" type="submit">Add to FestFlow</button></div>
         <p class="muted small" style="margin-bottom:0">Hotel, Airbnb and ticket numbers are starting estimates. Live hotel rates replace them on the festival page when a SerpApi key is set.</p>
       </form>`;
 
@@ -1216,7 +1210,7 @@
         cityLabel = r.city || place;
         const near = FL.nearestAirport(r.lat, r.lon);
         form.airport.value = near.code;
-        $('#airportHint').innerHTML = `📍 ${esc(cityLabel)} · nearest airport <b style="color:var(--text)">${near.code}</b> (${near.mi} mi). Change it if a bigger airport nearby is cheaper.`;
+        $('#airportHint').innerHTML = `${esc(cityLabel)} · nearest airport <b style="color:var(--text)">${near.code}</b> (${near.mi} mi). Change it if a bigger airport nearby is cheaper.`;
       } catch (e) {
         $('#airportHint').textContent = 'Map lookup needs node server.js running. Pick the nearest airport yourself.';
       }
@@ -1229,7 +1223,7 @@
         status.innerHTML = '<div class="notice"><b>Automatic lookup is off.</b> Add a SerpApi key to <code>festflow/.env</code> to fill this in from Google. For now, enter the details below.</div>';
         return;
       }
-      status.innerHTML = `<div class="live-card"><span class="badge info">● LIVE</span> <span class="muted small">Searching Google for “${esc(query)}”…</span></div>`;
+      status.innerHTML = `<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Searching Google for “${esc(query)}”…</span></div>`;
       try {
         const r = await FL.lookup(query);
         if (!form.isConnected) return;
@@ -1246,7 +1240,7 @@
           r.price && `tickets from about <b>${money(r.price)}</b>`,
           r.website && 'official site',
         ].filter(Boolean);
-        status.innerHTML = `<div class="live-card"><span class="badge good">● FOUND</span>
+        status.innerHTML = `<div class="live-card"><span class="badge good">Found</span>
           <span class="muted small">${found.length ? 'Filled in ' + found.join(', ') + '.' : "Google didn't return clear details. Fill in what's missing."} Check everything before saving.</span>
           ${r.sources && r.sources.length ? `<div class="small" style="margin-top:8px">${r.sources.filter((x) => x.link).map((x) => `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title || x.link)} ↗</a>`).join('<br>')}</div>` : ''}</div>`;
         placeIt(r.location || (r.name || query));
@@ -1289,7 +1283,7 @@
       S.custom.push(f);
       F.festivals.push(f);
       save();
-      toast(`${name} added ✦`);
+      toast(`${name} added`);
       location.hash = `#/festival/${id}`;
     });
 
@@ -1390,7 +1384,7 @@
     const selItems = calItems(cal.sel);
     view.innerHTML = `
       <div class="page-head"><div><h1>Calendar</h1><p class="muted">Your festivals, flights, sets and reminders in one view.</p></div>
-        <div class="btn-row"><button class="btn" id="ics">↓ Export .ics</button></div></div>
+        <div class="btn-row"><button class="btn" id="ics">Export .ics</button></div></div>
       <div class="cal-layout">
         <div>
           <div class="cal-head">
@@ -1503,7 +1497,7 @@
         <div class="btn-row" style="margin-top:20px"><button class="btn primary" type="submit">Save profile</button></div></form>
       <div class="card pad-lg section"><h2>Your data</h2>
         <p class="muted small">Everything is stored in this browser only. ${plural(Object.keys(S.plans).length, 'plan')} · ${plural(S.events.length, 'calendar event')}.</p>
-        <div class="btn-row"><button class="btn" id="ics">↓ Export calendar (.ics)</button><button class="btn danger" id="reset">Reset all data</button></div></div>`;
+        <div class="btn-row"><button class="btn" id="ics">Export calendar (.ics)</button><button class="btn danger" id="reset">Reset all data</button></div></div>`;
     bindProfileForm($('#pf'), () => { toast('Profile saved'); viewProfile(); });
     $('#ics').addEventListener('click', exportIcs);
     $('#reset').addEventListener('click', () => {
@@ -1522,7 +1516,7 @@
     const navKey = name === '' ? 'dashboard' : name === 'festival' || name === 'add' ? 'festivals' : name;
     $$('.nav a[data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === navKey));
     fn(arg && decodeURIComponent(arg));
-    if (window.FX) { FX.pageEnter(view); FX.tickCountdowns(); }
+    if (window.FX) FX.tickCountdowns();
   }
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
   render();

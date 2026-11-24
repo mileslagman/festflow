@@ -275,6 +275,13 @@ td .badge { white-space: nowrap; }
 .stepper button:hover:not(:disabled) { background: var(--raised); }
 .stepper button:disabled { color: var(--muted); opacity: .5; cursor: default; }
 .stepper output { flex: 1; text-align: center; color: var(--text); font-size: 16px; font-weight: 600; }
+.stepper input { flex: 1; width: 0; height: 100%; padding: 0; border: 0; background: none; text-align: center; font-size: 16px; font-weight: 600; appearance: textfield; -moz-appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.rooms { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: flex-end; margin-top: 14px; }
+.rooms .field { display: flex; flex-direction: column; gap: 6px; flex: 0 0 170px; font-size: 14px; color: var(--muted); }
+.rooms p { flex: 1 1 240px; margin: 0; }
+.warn-text { color: var(--accent); }
+.linkish { padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-decoration: underline; cursor: pointer; }
 .check { display: flex; gap: 9px; align-items: flex-start; margin-top: 12px; font-size: 14px; color: var(--muted); cursor: pointer; }
 .check input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; }
 .own-stay { margin-top: 14px; padding: 16px; border-radius: 10px; background: var(--raised); }

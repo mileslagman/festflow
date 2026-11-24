@@ -100,8 +100,11 @@
 
   // Live fares come from server.js (/api/fares), which holds the SerpApi key.
   // When the app is served without it (or with no key), liveStatus() resolves false.
+  // GitHub Pages only serves files, so there's no server to ask.
+  const hosted = location.hostname.endsWith('.github.io');
   let status = null;
   function liveStatus() {
+    if (hosted) return Promise.resolve(false);
     if (!status) {
       status = fetch('api/status')
         .then((r) => (r.ok ? r.json() : { live: false }))
@@ -129,8 +132,39 @@
   const liveStays = (q, checkin, checkout, adults, rentals) =>
     getLive('api/stays', { q, checkin, checkout, adults, rentals: rentals ? 1 : 0 });
   const lookup = (q) => getLive('api/lookup', { q });
-  const geocode = (q) => getLive('api/geocode', { q }); // free, works without a SerpApi key
-  const route = (a, b) => getLive('api/route', { from: `${a.lat.toFixed(4)},${a.lon.toFixed(4)}`, to: `${b.lat.toFixed(4)},${b.lon.toFixed(4)}` });
+
+  // Maps are free and need no key. The server caches them; on the hosted site the browser
+  // asks OpenStreetMap directly (both services allow cross-origin requests).
+  const mapCache = {};
+  function getMap(url, read) {
+    if (!mapCache[url]) {
+      mapCache[url] = fetch(url)
+        .then((r) => { if (!r.ok) throw new Error(`Map service returned ${r.status}`); return r.json(); })
+        .then(read)
+        .catch((e) => { delete mapCache[url]; throw e; });
+    }
+    return mapCache[url];
+  }
+  function geocode(q) {
+    if (!hosted) return getLive('api/geocode', { q });
+    const params = new URLSearchParams({ q, format: 'jsonv2', limit: '1', addressdetails: '1', 'accept-language': 'en' });
+    return getMap(`https://nominatim.openstreetmap.org/search?${params}`, ([hit]) => {
+      if (!hit) return { found: false };
+      const a = hit.address || {};
+      const town = a.city || a.town || a.village || a.hamlet || a.county || '';
+      const region = a.country_code === 'us' ? (a['ISO3166-2-lvl4'] || '').replace('US-', '') : a.country || '';
+      return { found: true, lat: Number(hit.lat), lon: Number(hit.lon), city: [town, region].filter(Boolean).join(', ') };
+    });
+  }
+  function route(a, b) {
+    const at = (c) => [c.lat.toFixed(4), c.lon.toFixed(4)];
+    if (!hosted) return getLive('api/route', { from: at(a).join(','), to: at(b).join(',') });
+    const path = [a, b].map((c) => at(c).reverse().join(',')).join(';');
+    return getMap(`https://router.project-osrm.org/route/v1/driving/${path}?overview=false`, (j) => (
+      j.code === 'Ok' && j.routes && j.routes.length
+        ? { found: true, miles: j.routes[0].distance / 1609.34, hours: j.routes[0].duration / 3600 }
+        : { found: false }));
+  }
 
   function nearestAirport(lat, lon) {
     const here = { lat, lon };
@@ -142,5 +176,5 @@
     return best;
   }
 
-  F.flights = { airport, miles, estimate, trend, links, sweetSpot, liveStatus, live, liveStays, lookup, geocode, route, nearestAirport };
+  F.flights = { airport, miles, estimate, trend, links, sweetSpot, liveStatus, live, liveStays, lookup, geocode, route, nearestAirport, hosted };
 })();

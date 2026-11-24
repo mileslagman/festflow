@@ -98,7 +98,13 @@
 
   // ---------- stay + ground transport models ----------
   const STAY_PAD = 14; // how many days before or after the festival a stay can stretch
-  // Hotel rooms hold 2, Airbnb homes hold `sleeps`; costs are split across the group.
+  const MAX_ROOMS = 12;
+  // One room per 2 people unless you've set your own number.
+  const autoRooms = (p) => Math.ceil((p.group || 1) / 2);
+  const hotelRooms = (p) => (p.rooms >= 1 ? Math.min(MAX_ROOMS, Math.round(p.rooms)) : autoRooms(p));
+  const perRoom = (p) => Math.ceil((p.group || 1) / hotelRooms(p));
+  const hotelAdults = (p) => Math.max(2, perRoom(p)); // guests per room in a live hotel search
+  // Airbnb homes hold `sleeps`; costs are split across the group.
   function stayCost(f, p, nights, checkin, checkout) {
     const group = p.group || 1;
     const L = f.lodging;
@@ -116,9 +122,10 @@
     }
     const kind = p.lodging === 'airbnb' ? 'airbnb' : 'hotel';
     const ls = p.liveStay;
-    const live = ls && ls.kind === kind && ls.checkin === checkin && ls.checkout === checkout && ls.group === group && ls.nightly != null;
+    const live = ls && ls.kind === kind && ls.checkin === checkin && ls.checkout === checkout && ls.group === group && ls.nightly != null
+      && (kind !== 'hotel' || (ls.adults || 2) === hotelAdults(p));
     // A live Airbnb search is sized for the whole group, so it's one home.
-    const units = kind === 'hotel' ? Math.ceil(group / 2) : live ? 1 : Math.ceil(group / L.sleeps);
+    const units = kind === 'hotel' ? hotelRooms(p) : live ? 1 : Math.ceil(group / L.sleeps);
     const rate = live ? ls.nightly : kind === 'hotel' ? L.hotel : L.airbnb;
     return {
       kind, live, rate, units, total: rate * nights * units,
@@ -489,7 +496,7 @@
           S.profile.homeCoords = { lat: r.lat, lon: r.lon, label: r.city || homeCity };
           save();
           toast(`Driving distances now start from ${r.city || homeCity}`);
-        }).catch(() => toast('Map lookup needs node server.js; driving starts from your home airport for now'));
+        }).catch(() => toast('Map lookup isn’t responding; driving starts from your home airport for now'));
       }
       // Plans that were following the old home airport follow the new one.
       for (const [id, p] of Object.entries(S.plans)) {
@@ -607,8 +614,8 @@
       const raw = $('#q').value.trim();
       const lookupCard = raw ? `<a class="card fcard lookup-card" href="#/add/${encodeURIComponent(raw)}"><span class="bar"></span>
           <h3>${list.length ? 'Looking for something else?' : `Can't find “${esc(raw)}”?`}</h3>
-          <p class="muted small" style="margin:0">Look up “${esc(raw)}” on Google and add it with its dates, tickets, flights, stays and calendar.</p>
-          <span class="btn primary sm" style="align-self:flex-start;margin-top:auto">Look it up</span></a>` : '';
+          <p class="muted small" style="margin:0">${FL.hosted ? `Add “${esc(raw)}” yourself` : `Look up “${esc(raw)}” on Google and add it`} with its dates, tickets, flights, stays and calendar.</p>
+          <span class="btn primary sm" style="align-self:flex-start;margin-top:auto">${FL.hosted ? 'Add it' : 'Look it up'}</span></a>` : '';
       $('#fgrid').innerHTML = list.length || raw ? list.map(festCard).join('') + lookupCard : '<div class="empty">No festivals match those filters.</div>';
       $('#fgrid').dataset.count = list.length;
     };
@@ -720,6 +727,8 @@
       $$('.opt', root).forEach((b) => b.addEventListener('click', () => { p[b.dataset.field] = b.dataset.v; commit(); }));
     }
 
+    const roomMath = (t) => `${plural(t.stay.units, 'room')} × ${plural(t.nights, 'night')} × ${money(t.stay.rate)} = ${money(t.stay.total)}${t.group > 1 ? `, ${money(t.lodging)} each` : ''}.`;
+
     function drawStay(t) {
       const L = f.lodging, group = p.group;
       const kinds = [...(L.camp != null ? ['camp'] : []), 'hotel', 'airbnb', 'own'];
@@ -733,7 +742,7 @@
       const own = p.ownStay || { label: '', amount: '', basis: 'total' };
       const dayAfterIn = addDays(t.checkin, 1);
       const minOut = dayAfterIn > t.start ? dayAfterIn : t.start; // at least one night, and not before the festival
-      const rooms = Math.ceil(group / 2);
+      const rooms = hotelRooms(p), each = perRoom(p);
       const q = L.query, dates = `${fmtDate(t.checkin)} to ${fmtDate(t.checkout)}`;
       $('#stayBox').innerHTML = `
         <p class="muted small" style="margin:0 0 12px">Per person for ${plural(t.nights, 'night')}${group > 1 ? `, split ${group} ways` : ''}. Most people stay in <b style="color:var(--text)">${esc(L.area)}</b>. Rates are festival-week prices.</p>
@@ -750,6 +759,18 @@
         ${p.stayBefore !== 1 || p.stayAfter !== 1 || !p.matchTravel ? '<button type="button" class="btn sm ghost" id="stayReset" style="margin-top:10px">Reset dates</button>' : ''}
         <div style="height:16px"></div>
         ${optionTiles('lodging', opts)}
+        ${t.stay.kind === 'hotel' ? `<div class="rooms">
+          <div class="field"><span id="roomsLabel">Hotel rooms</span><div class="stepper" role="group" aria-labelledby="roomsLabel">
+            <button type="button" data-room="-1" aria-label="One room less" ${rooms <= 1 ? 'disabled' : ''}>−</button>
+            <input id="rooms" type="number" inputmode="numeric" min="1" max="${MAX_ROOMS}" step="1" value="${rooms}" aria-labelledby="roomsLabel" />
+            <button type="button" data-room="1" aria-label="One room more" ${rooms >= MAX_ROOMS ? 'disabled' : ''}>+</button></div></div>
+          <p class="muted small"><span id="roomMath">${roomMath(t)}</span> ${
+            each > 4 ? `<span class="warn-text">That puts ${each} people in a room, and most hotel rooms sleep 4 at most.</span>`
+            : each > 2 ? `Up to ${each} people per room, so look for two beds. Hotels may charge extra past 2 guests.`
+            : rooms > group ? 'That’s more rooms than people.'
+            : group > 1 ? (each === 1 ? 'Everyone gets their own room.' : 'Up to 2 people per room.') : ''}
+            ${rooms !== autoRooms(p) ? `<button type="button" class="linkish" id="roomsAuto">Reset to ${plural(autoRooms(p), 'room')}</button>` : ''}</p>
+        </div>` : ''}
         ${t.stay.kind === 'own' ? `<div class="own-stay">
           <div class="form-grid">
             <label class="field">Where you're staying<input id="ownLabel" maxlength="40" placeholder="e.g. Our Airbnb, Friend's place" value="${esc(own.label || '')}" /></label>
@@ -788,6 +809,22 @@
       $('#matchTravel').addEventListener('change', (e) => { p.matchTravel = e.target.checked; commit(); $('#matchTravel').focus(); });
       const reset = $('#stayReset');
       if (reset) reset.addEventListener('click', () => { p.stayBefore = 1; p.stayAfter = 1; p.matchTravel = true; commit(); });
+      if (t.stay.kind === 'hotel') {
+        // Landing back on the automatic number goes back to following the group size.
+        const setRooms = (n) => {
+          n = Math.min(MAX_ROOMS, Math.max(1, Math.round(n) || 1));
+          p.rooms = n === autoRooms(p) ? null : n;
+          commit();
+        };
+        $('#rooms').addEventListener('change', (e) => setRooms(e.target.value === '' ? autoRooms(p) : Number(e.target.value)));
+        $$('[data-room]', $('#stayBox')).forEach((b) => b.addEventListener('click', () => {
+          setRooms(hotelRooms(p) + Number(b.dataset.room));
+          const again = $(`[data-room="${b.dataset.room}"]`, $('#stayBox'));
+          if (again && !again.disabled) again.focus(); // keep keyboard focus after the redraw
+        }));
+        const auto = $('#roomsAuto');
+        if (auto) auto.addEventListener('click', () => { p.rooms = null; commit(); $('#rooms').focus(); });
+      }
       if (t.stay.kind === 'own') {
         const setOwn = (key, val) => { p.ownStay = { ...(p.ownStay || { label: '', amount: 0, basis: 'total' }), [key]: val }; commit(); };
         $('#ownLabel').addEventListener('change', (e) => setOwn('label', e.target.value.trim()));
@@ -802,9 +839,9 @@
       const kind = t.stay.kind;
       if (kind === 'camp' || kind === 'own') { box.innerHTML = ''; return; }
       const rentals = kind === 'airbnb';
-      const adults = rentals ? p.group : 2;
-      const key = [kind, t.checkin, t.checkout, p.group].join('|');
-      const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).checkin, trip(f, p).checkout, p.group].join('|') !== key;
+      const adults = rentals ? p.group : hotelAdults(p);
+      const key = [kind, t.checkin, t.checkout, p.group, adults].join('|');
+      const stale = () => !box.isConnected || [trip(f, p).stay.kind, trip(f, p).checkin, trip(f, p).checkout, p.group, rentals ? p.group : hotelAdults(p)].join('|') !== key;
       if (!(await FL.liveStatus())) return;
       box.innerHTML = `<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Checking Google ${rentals ? 'vacation rentals' : 'Hotels'}…</span></div>`;
       try {
@@ -812,12 +849,13 @@
         if (stale()) return;
         box.innerHTML = liveStayCard(r, rentals, t.nights);
         if (r.typical != null) {
-          p.liveStay = { kind, nightly: r.typical, checkin: t.checkin, checkout: t.checkout, group: p.group, at: r.fetchedAt };
+          p.liveStay = { kind, nightly: r.typical, checkin: t.checkin, checkout: t.checkout, group: p.group, adults, at: r.fetchedAt };
           if (planned()) { S.plans[id] = { ...p }; save(); }
           drawBreakdown();
-          // Refresh the tiles so the selected option shows the live rate.
+          // Refresh the tiles and room math so they show the live rate.
           const opt = $(`#stayBox .opt[data-v="${kind}"]`);
           const s = trip(f, p);
+          if ($('#roomMath')) $('#roomMath').textContent = roomMath(s);
           if (opt) opt.innerHTML = `<span class="muted small">${s.stay.label}</span><b>${money(s.lodging)}</b><span class="muted small">${money(s.stay.rate)}/night · live · ${plural(s.stay.units, s.stay.unitLabel)}</span>`;
         }
       } catch (err) {
@@ -1055,7 +1093,7 @@
           <div class="row small"><span class="muted">Drive home</span><span>${money(oneWay)}</span></div>
           <div class="row"><b>Gas, round trip</b><b>${money(d.total)}</b></div>
         </div>
-        <p class="muted small">${d.real ? 'Road distance and time from OpenStreetMap routing.' : 'Distance estimated from a straight line. The real road route loads when node server.js is running.'}
+        <p class="muted small">${d.real ? 'Road distance and time from OpenStreetMap routing.' : 'Distance estimated from a straight line. The real road route loads once OpenStreetMap routing responds.'}
           ${fly.flight.local ? '' : ` Flying would be about <b style="color:var(--text)">${money(fly.travel.price)}</b> per person.`}
           ${d.hours > 9 ? ' That’s a long haul: consider splitting it with an overnight stop, which adds a hotel night each way.' : ''}</p>
         <div class="btn-row"><a class="btn sm" target="_blank" rel="noopener" href="${maps}">Directions in Google Maps ↗</a>
@@ -1091,7 +1129,9 @@
       const key = [t.from, t.depart, t.ret].join('|');
       const stale = () => !box.isConnected || [p.from, trip(f, p).depart, trip(f, p).ret].join('|') !== key;
       if (!(await FL.liveStatus())) {
-        if (!stale()) box.innerHTML = '<div class="notice"><b>Live fares are off.</b> Add a free SerpApi key to <code>festflow/.env</code> and run <code>node server.js</code> to see real Google Flights prices here (see README).</div>';
+        if (!stale()) box.innerHTML = FL.hosted
+          ? '<div class="notice"><b>These fares are estimates.</b> The website version can’t check live fares, so use the links to see real prices.</div>'
+          : '<div class="notice"><b>Live fares are off.</b> Add a free SerpApi key to <code>festflow/.env</code> and run <code>node server.js</code> to see real Google Flights prices here (see README).</div>';
         return;
       }
       box.innerHTML = '<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Checking Google Flights…</span></div>';
@@ -1197,12 +1237,12 @@
     const g = (S.profile && S.profile.genres) || [];
     let coords = null, cityLabel = '';
     view.innerHTML = `
-      <div class="page-head"><div><h1>Add a festival</h1><p class="muted">Look up any festival on Google, check the details, and FestFlow plans it like the rest: flights, stays, rides and calendar.</p></div>
+      <div class="page-head"><div><h1>Add a festival</h1><p class="muted">${FL.hosted ? 'Enter the details' : 'Look up any festival on Google, check the details,'} and FestFlow plans it like the rest: flights, stays, rides and calendar.</p></div>
         <a class="btn ghost" href="#/festivals">← All festivals</a></div>
       <div class="card pad-lg">
         <form id="lookupForm" style="display:flex;gap:10px;flex-wrap:wrap">
           <input type="search" name="q" value="${esc(q)}" placeholder="Festival name, e.g. Imagine Music Festival" required style="flex:1 1 260px" />
-          <button class="btn primary" type="submit">Look it up</button></form>
+          <button class="btn primary" type="submit">${FL.hosted ? 'Find details' : 'Look it up'}</button></form>
         <div id="lookupStatus" style="margin-top:12px"></div>
       </div>
       <form class="card pad-lg section" id="addForm" autocomplete="off">
@@ -1234,7 +1274,7 @@
           <div class="chips">${F.genres.map((x) => `<span class="chip ${g.includes(x) ? 'on' : ''}" data-genre="${x}">${x}</span>`).join('')}</div></div>
         <input type="hidden" name="blurb" />
         <div class="btn-row" style="margin-top:22px"><button class="btn primary" type="submit">Add to FestFlow</button></div>
-        <p class="muted small" style="margin-bottom:0">Hotel, Airbnb and ticket numbers are starting estimates. Live hotel rates replace them on the festival page when a SerpApi key is set.</p>
+        <p class="muted small" style="margin-bottom:0">Hotel, Airbnb and ticket numbers are starting estimates.${FL.hosted ? '' : ' Live hotel rates replace them on the festival page when a SerpApi key is set.'}</p>
       </form>`;
 
     const form = $('#addForm');
@@ -1255,7 +1295,7 @@
         form.airport.value = near.code;
         $('#airportHint').innerHTML = `${esc(cityLabel)} · nearest airport <b style="color:var(--text)">${near.code}</b> (${near.mi} mi). Change it if a bigger airport nearby is cheaper.`;
       } catch (e) {
-        $('#airportHint').textContent = 'Map lookup needs node server.js running. Pick the nearest airport yourself.';
+        $('#airportHint').textContent = 'Map lookup isn’t responding. Pick the nearest airport yourself.';
       }
     }
     form.loc.addEventListener('change', () => placeIt(form.loc.value.trim()));
@@ -1263,7 +1303,9 @@
     async function runLookup(query) {
       form.name.value = form.name.value || query;
       if (!(await FL.liveStatus())) {
-        status.innerHTML = '<div class="notice"><b>Automatic lookup is off.</b> Add a SerpApi key to <code>festflow/.env</code> to fill this in from Google. For now, enter the details below.</div>';
+        status.innerHTML = FL.hosted
+          ? `<div class="notice"><b>The website version can’t fill this in for you.</b> <a target="_blank" rel="noopener" href="https://www.google.com/search?${new URLSearchParams({ q: `${query} music festival dates tickets` })}">Search Google for “${esc(query)}” ↗</a> and enter the details below.</div>`
+          : '<div class="notice"><b>Automatic lookup is off.</b> Add a SerpApi key to <code>festflow/.env</code> to fill this in from Google. For now, enter the details below.</div>';
         return;
       }
       status.innerHTML = `<div class="live-card"><span class="badge info">Live</span> <span class="muted small">Searching Google for “${esc(query)}”…</span></div>`;

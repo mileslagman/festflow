@@ -2,7 +2,13 @@
 
 An all-in-one music festival planner with a personalized dashboard, festival dates and ticket prices, flight prices, hotel and Airbnb rates, Uber/Lyft and rental car costs, a set-time planner and a calendar that exports to `.ics`.
 
-## Run it
+## Use it online
+
+https://mileslagman.github.io/festflow/
+
+The website is this repo served by GitHub Pages, and it updates when `main` is pushed. Pages can only serve files, so live fares, live hotel rates and Google festival lookup aren't available there; it uses the built-in estimates and links instead. Map lookups and driving routes still work, because the browser asks OpenStreetMap directly. Plans are saved in your own browser and aren't shared between the website and `localhost`.
+
+## Run it on your computer
 
 ```bash
 node server.js
@@ -39,9 +45,9 @@ Without a key, the app falls back to its built-in estimates and shows links to G
 
 - **Dates:** 2027 festival dates are projected from each festival's usual pattern. Confirm them on the official site.
 - **Tickets:** ticket prices are the last edition's face value in approximate USD, before fees.
-- **Stays:** estimated festival-week rates per night, in `js/data.js`. Hotels assume 2 people per room, and Airbnb homes sleep 4–6 depending on the area. Stay costs are split across your group. Stays default to one night before through one night after the festival. Change the check-in, check-out or number of nights under Where to stay, and choose whether your travel dates follow. To use what you're actually paying, choose "Your own price" and enter it per night or as a total for the stay.
+- **Stays:** estimated festival-week rates per night, in `js/data.js`. Hotels start at one room per 2 people, which you can change under Where to stay, and Airbnb homes sleep 4–6 depending on the area. Stay costs are split across your group. Stays default to one night before through one night after the festival. Change the check-in, check-out or number of nights under Where to stay, and choose whether your travel dates follow. To use what you're actually paying, choose "Your own price" and enter it per night or as a total for the stay.
 - **Uber/Lyft:** modeled at about $5.50 + $2.80 per mile, with a 1.2× festival bump and about 2× surge when leaving at close, and 4 people per car. Rides cost about 20% less in Europe.
 - **Crew & cost split:** name everyone going, then set who paid each shared cost and who's in on it. Shared costs are the stay, gas and Uber/rental/parking, plus any extras you add. Tickets, flights and food count as each person's own costs. FestFlow shows each person's total and the fewest payments needed to settle up, with a summary you can copy for the group chat.
 - **Driving:** offered when the venue is within about 900 straight-line miles of home and on the same continent. Road distance and time come from OpenStreetMap routing, which is free and needs no key. Gas is round-trip miles ÷ your car's MPG × the gas price, both editable, with up to 5 people per car. When you drive, your own car replaces Uber, rental cars and transit at the festival. Set a home city in your profile for more accurate distances; otherwise driving starts from your home airport.
 - **Rental car:** daily rate plus about 30% for taxes and fees, gas at 28 mpg, and festival parking per day. It assumes 5 people per car. If you're camping, the car stays at the campsite, so there's no daily driving or parking.
-- **Your data:** your profile, plans, calendar and the festivals you add are stored in your browser's localStorage.
+- **Your data:** your profile, plans, calendar and the festivals you add are stored in your browser's localStorage. Home cities and driving start points you enter are sent to OpenStreetMap's public services to find them on the map and measure the drive.

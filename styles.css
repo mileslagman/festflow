@@ -45,11 +45,15 @@ code { background: var(--raised); padding: 1px 6px; border-radius: 5px; font-siz
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- layout ---------- */
-.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; overflow-x: clip; }
 .nav { position: sticky; top: 0; height: 100vh; padding: 22px 14px 16px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); overflow-y: auto; scrollbar-width: thin; }
 .nav a { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; text-decoration: none; color: var(--muted); font-weight: 500; }
 .nav a:hover { color: var(--text); }
-.nav a.active { color: var(--text); background: var(--raised); }
+.nav a.active { color: var(--text); }
+.nav > a { position: relative; transition: color .2s; }
+.nav-pill { position: absolute; top: 0; left: 0; border-radius: 8px; background: var(--raised); pointer-events: none; }
+.nav-pill.glide { transition: transform .34s cubic-bezier(.2, .75, .25, 1), width .34s cubic-bezier(.2, .75, .25, 1), height .34s; }
+.nav .ico { transition: color .2s; }
 .nav .brand { margin-bottom: 20px; padding: 4px 12px; gap: 10px; color: var(--text); }
 .brand-name { font: 700 19px 'Cinzel Decorative', Georgia, serif; }
 .logo { width: 26px; height: 26px; flex: none; color: var(--accent); }
@@ -57,6 +61,8 @@ code { background: var(--raised); padding: 1px 6px; border-radius: 5px; font-siz
 .nav a.active .ico { color: var(--accent); }
 
 .view { padding: 36px 40px 90px; max-width: 1240px; width: 100%; min-width: 0; }
+.view-ghost { position: fixed; margin: 0; pointer-events: none; }
+
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
 .page-head p { margin: 6px 0 0; max-width: 65ch; }
 .section { margin-top: 36px; }

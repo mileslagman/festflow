@@ -1653,15 +1653,21 @@
 
   // ---------- router ----------
   const routes = { '': viewDashboard, festivals: viewFestivals, festival: viewFestival, add: viewAddFestival, flights: viewFlights, calendar: viewCalendar, profile: viewProfile };
+  let at = null; // the page on screen, so the next one knows which way to slide
   function render() {
     const [, name = '', arg] = location.hash.split('/');
     const fn = routes[name] || viewDashboard;
     const navKey = name === '' ? 'dashboard' : name === 'festival' || name === 'add' ? 'festivals' : name;
     $$('.nav a[data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === navKey));
+    const next = { tab: navKey, deep: name === 'festival' || name === 'add' };
+    const enter = window.FX && at ? FX.leave(view, at, next) : null;
+    at = next;
     fn(arg && decodeURIComponent(arg));
     drawSide();
-    if (window.FX) FX.tickCountdowns();
+    window.scrollTo(0, 0);
+    if (enter) enter();
+    if (window.FX) { FX.movePill(); FX.tickCountdowns(); }
   }
-  window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', render);
   render();
 })();

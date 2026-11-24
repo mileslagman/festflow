@@ -583,7 +583,10 @@
   }
 
   function viewFestivals() {
-    const months = [...new Set(F.festivals.flatMap((f) => f.weekends.map((w) => w[0].slice(0, 7))))].sort();
+    // Finished festivals drop off the list unless you planned a trip to them.
+    const t0 = todayISO();
+    const listed = F.festivals.filter((f) => S.plans[f.id] || f.weekends[f.weekends.length - 1][1] >= t0);
+    const months = [...new Set(listed.flatMap((f) => f.weekends.map((w) => w[0].slice(0, 7))))].sort();
     view.innerHTML = `
       <div class="page-head"><div><h1>Festivals</h1><p class="muted">Dates, tickets and estimated trip cost from ${home()}. Don't see yours? Search for it.</p></div>
         <a class="btn primary" href="#/add">+ Add a festival</a></div>
@@ -598,11 +601,11 @@
         </select>
       </div>
       <div id="fgrid" class="grid g3"></div>
-      <p class="notice" style="margin-top:20px"><b>About these numbers:</b> 2027 dates are projected from each festival's usual pattern — confirm on the official site before booking. Ticket prices are last edition's face value (≈ USD, before fees). Flight prices are modeled estimates; open a festival for live-fare links.</p>`;
+      <p class="notice" style="margin-top:20px"><b>About these numbers:</b> dates marked projected follow each festival's usual pattern and aren't announced yet, so confirm on the official site before booking. Ticket prices are approximate (USD, before fees). Flight prices are modeled estimates; open a festival for live-fare links.</p>`;
     const draw = () => {
       const q = $('#q').value.toLowerCase(), g = $('#genre').value, m = $('#month').value, sort = $('#sort').value;
       const genres = (S.profile && S.profile.genres) || [];
-      let list = F.festivals.filter((f) =>
+      let list = listed.filter((f) =>
         (!q || (f.name + f.city).toLowerCase().includes(q)) &&
         (!g || f.genres.includes(g)) &&
         (!m || f.weekends.some((w) => w[0].startsWith(m) || w[1].startsWith(m))));

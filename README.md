@@ -43,8 +43,8 @@ Without a key, the app falls back to its built-in estimates and shows links to G
 
 ## Data notes
 
-- **Dates:** 2027 festival dates are projected from each festival's usual pattern. Confirm them on the official site.
-- **Tickets:** ticket prices are the last edition's face value in approximate USD, before fees.
+- **Dates:** dates marked "projected" follow each festival's usual pattern and haven't been announced. The rest were announced as of November 2026. Confirm on the official site before booking. Finished festivals drop off the list.
+- **Tickets:** ticket prices are approximate USD, before fees, based on announced prices or recent editions.
 - **Stays:** estimated festival-week rates per night, in `js/data.js`. Hotels start at one room per 2 people, which you can change under Where to stay, and Airbnb homes sleep 4–6 depending on the area. Stay costs are split across your group. Stays default to one night before through one night after the festival. Change the check-in, check-out or number of nights under Where to stay, and choose whether your travel dates follow. To use what you're actually paying, choose "Your own price" and enter it per night or as a total for the stay.
 - **Uber/Lyft:** modeled at about $5.50 + $2.80 per mile, with a 1.2× festival bump and about 2× surge when leaving at close, and 4 people per car. Rides cost about 20% less in Europe.
 - **Crew & cost split:** name everyone going, then set who paid each shared cost and who's in on it. Shared costs are the stay, gas and Uber/rental/parking, plus any extras you add. Tickets, flights and food count as each person's own costs. FestFlow shows each person's total and the fewest payments needed to settle up, with a summary you can copy for the group chat.
